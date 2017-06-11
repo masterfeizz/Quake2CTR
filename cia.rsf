@@ -7,7 +7,7 @@ BasicInfo:
   Logo                    : Nintendo # Nintendo / Licensed / Distributed / iQue / iQueForSystem
 
 TitleInfo:
-  UniqueId                : 0xFF124
+  UniqueId                : 0xFF125
   Category                : Application
   
 Option:
