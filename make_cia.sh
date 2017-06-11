@@ -1,0 +1,1 @@
+makerom -f cia -o Quake2CTR.cia -elf Quake2CTR.elf -rsf cia.rsf -banner banner.bin -romfs romfs.bin -icon icon.bin -exefslogo -target t
