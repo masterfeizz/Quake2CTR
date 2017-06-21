@@ -24,7 +24,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <3ds.h>
 
 #define SAMPLE_RATE   	22050
-#define NUM_SAMPLES 	2048
+#define NUM_SAMPLES 	4096
 #define SAMPLE_SIZE		4
 #define BUFFER_SIZE 	NUM_SAMPLES*SAMPLE_SIZE
 
