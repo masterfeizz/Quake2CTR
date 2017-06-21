@@ -1,5 +1,7 @@
 build/
 *.cia
+*.3dsx
+*.smdh
 
 # Prerequisites
 *.d

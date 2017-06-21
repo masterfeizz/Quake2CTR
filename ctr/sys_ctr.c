@@ -378,10 +378,12 @@ int main (int argc, char **argv)
 	int	time, oldtime, newtime;
 
 	romfsInit();
+
+	APT_SetAppCpuTimeLimit(30);
 	osSetSpeedupEnable(true);
 
 	gfxInit(GSP_RGB565_OES,GSP_RGB565_OES,false);
-	gfxSetDoubleBuffering(GFX_TOP, false);
+	gfxSetDoubleBuffering(GFX_TOP, true);
 	gfxSetDoubleBuffering(GFX_BOTTOM, false);
 	gfxSwapBuffersGpu();
 

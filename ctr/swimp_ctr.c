@@ -22,8 +22,33 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "../ref_soft/r_local.h"
 #include <3ds.h>
 
+#define STACKSIZE 1024
+
+Thread refresh_thread;
+Handle refresh_request;
+
+int run_thread = 1;
+
 uint16_t  	*framebuffer;
+uint8_t 	*swap_buffer;
 uint16_t 	d_8to16table[256];
+
+void SWimp_ThreadFunc(void *arg)
+{
+	while(run_thread) 
+	{
+		svcWaitSynchronization(refresh_request, U64_MAX);
+
+		for(int x=0; x<400; x++)
+			for(int y=0; y<240;y++)
+				framebuffer[(x*240 + (239 -y))] = d_8to16table[swap_buffer[y*400 + x]];
+
+		gfxFlushBuffers();
+		gfxSwapBuffers();
+
+		svcClearEvent(refresh_request);
+	}
+}
 
 void SWimp_BeginFrame( float camera_separation )
 {
@@ -31,23 +56,20 @@ void SWimp_BeginFrame( float camera_separation )
 
 void SWimp_EndFrame (void)
 {
-	int x, y;
-	for(x=0; x<400; x++)
-	{
-		for(y=0; y<240;y++)
-		{
-			framebuffer[(x*240 + (239 -y))] = d_8to16table[vid.buffer[y*400 + x]];
-		}
-	}
+	framebuffer = (uint16_t*)gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL);
+	memcpy(swap_buffer, vid.buffer, 400 * 240);
+
+	svcSignalEvent(refresh_request);
 }
 
-int			SWimp_Init( void *hInstance, void *wndProc )
+int	SWimp_Init( void *hInstance, void *wndProc )
 {
-	framebuffer = (uint16_t*)gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL);
+	svcCreateEvent(&refresh_request,0);
+	refresh_thread = threadCreate(SWimp_ThreadFunc, 0, STACKSIZE, 0x18, 1, true);
 	return 0;
 }
 
-void		SWimp_SetPalette( const unsigned char *palette)
+void SWimp_SetPalette( const unsigned char *palette)
 {
 	int i;
 	unsigned char r, g, b;
@@ -55,7 +77,8 @@ void		SWimp_SetPalette( const unsigned char *palette)
 	if(palette==NULL)
 		return;
 
-	for(i = 0; i < 256; i++){
+	for(i = 0; i < 256; i++)
+	{
 		r = palette[i*4+0];
 		g = palette[i*4+1];
 		b = palette[i*4+2];
@@ -63,21 +86,29 @@ void		SWimp_SetPalette( const unsigned char *palette)
 	}
 }
 
-void		SWimp_Shutdown( void )
+void SWimp_Shutdown( void )
 {
+	run_thread = 0;
+
+	svcSignalEvent(refresh_request);
+	threadJoin(refresh_thread, U64_MAX);
+	svcCloseHandle(refresh_request);
+
+	free(swap_buffer);
 	free(vid.buffer);
 }
 
-rserr_t		SWimp_SetMode( int *pwidth, int *pheight, int mode, qboolean fullscreen )
+rserr_t	SWimp_SetMode( int *pwidth, int *pheight, int mode, qboolean fullscreen )
 {
 	vid.height = 240;
-	vid.width = 400;
+	vid.width  = 400;
 	vid.rowbytes = 400;
-	vid.buffer = malloc(400*240*8);
+	vid.buffer  = malloc(400 * 240);
+	swap_buffer = malloc(400 * 240);
 
 	return rserr_ok;
 }
 
-void		SWimp_AppActivate( qboolean active )
+void SWimp_AppActivate( qboolean active )
 {
 }
