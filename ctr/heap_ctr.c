@@ -8,6 +8,8 @@
 extern char* fake_heap_start;
 extern char* fake_heap_end;
 
+int __stacksize__ = 4 * 1024 * 1024;
+
 u32 __ctru_heap;
 u32 __ctru_linear_heap;
 

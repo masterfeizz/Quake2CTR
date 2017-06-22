@@ -34,7 +34,6 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #define TICKS_PER_MSEC 268111.856
 
-int __stacksize__ = 1024 * 1024;
 int	curtime;
 unsigned	sys_frame_time;
 

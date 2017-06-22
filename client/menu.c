@@ -1036,8 +1036,11 @@ static menulist_s		s_options_console_action;
 #ifdef _3DS
 extern cvar_t 	*cstick_sensitivity;
 extern cvar_t	*circlepad_sensitivity;
+extern cvar_t	*circlepad_look;
+
 static menuslider_s		s_options_circlepad_slider;
 static menuslider_s		s_options_cstick_slider;
+static menulist_s 		s_options_circlepadlook_box;
 #endif
 
 static void CrosshairFunc( void *unused )
@@ -1071,6 +1074,7 @@ static void MouseSpeedFunc( void *unused )
 }
 
 #ifdef _3DS
+
 static void CirclepadSpeedFunc( void *unused )
 {
 	Cvar_SetValue( "circlepad_sensitivity", s_options_circlepad_slider.curvalue / 2.0F );
@@ -1078,8 +1082,14 @@ static void CirclepadSpeedFunc( void *unused )
 
 static void CStickSpeedFunc( void *unused )
 {
-	Cvar_SetValue( "cstick_sensitivity", s_options_circlepad_slider.curvalue / 2.0F );
+	Cvar_SetValue( "cstick_sensitivity", s_options_cstick_slider.curvalue / 2.0F );
 }
+
+static void CirclepadLookFunc( void *unused )
+{
+	Cvar_SetValue( "circlepad_look", s_options_circlepadlook_box.curvalue );
+}
+
 #endif
 
 static void NoAltTabFunc( void *unused )
@@ -1127,10 +1137,14 @@ static void ControlsSetMenuItemValues( void )
 	Cvar_SetValue( "in_joystick", ClampCvar( 0, 1, in_joystick->value ) );
 	s_options_joystick_box.curvalue		= in_joystick->value;
 
-	s_options_noalttab_box.curvalue			= win_noalttab->value;
+	s_options_noalttab_box.curvalue		= win_noalttab->value;
 
 	#ifdef _3DS
-	s_options_circlepad_slider.curvalue 	= ( circlepad_sensitivity->value ) * 2;
+	s_options_circlepad_slider.curvalue = circlepad_sensitivity->value * 2;
+	s_options_cstick_slider.curvalue 	= cstick_sensitivity->value * 2;
+
+	Cvar_SetValue( "circlepad_look", ClampCvar( 0, 1, circlepad_look->value ) );
+	s_options_circlepadlook_box.curvalue			= circlepad_look->value;
 	#endif
 }
 
@@ -1315,17 +1329,17 @@ void Options_MenuInit( void )
 	s_options_cstick_slider.generic.x		= 0;
 	s_options_cstick_slider.generic.y		= 40;
 	s_options_cstick_slider.generic.name	= "C-Stick speed";
-	s_options_cstick_slider.generic.callback = CirclepadSpeedFunc;
+	s_options_cstick_slider.generic.callback = CStickSpeedFunc;
 	s_options_cstick_slider.minvalue		= 1;
 	s_options_cstick_slider.maxvalue		= 10;
 
 	s_options_sensitivity_slider.generic.type	= MTYPE_SLIDER;
 	s_options_sensitivity_slider.generic.x		= 0;
 	s_options_sensitivity_slider.generic.y		= 50;
-	s_options_sensitivity_slider.generic.name	= "look speed";
-	s_options_sensitivity_slider.generic.callback = CStickSpeedFunc;
-	s_options_sensitivity_slider.minvalue		= 2;
-	s_options_sensitivity_slider.maxvalue		= 22;
+	s_options_sensitivity_slider.generic.name	= "touch speed";
+	s_options_sensitivity_slider.generic.callback = MouseSpeedFunc;
+	s_options_sensitivity_slider.minvalue		= 1;
+	s_options_sensitivity_slider.maxvalue		= 10;
 
 
 	#else
@@ -1350,7 +1364,7 @@ void Options_MenuInit( void )
 	s_options_invertmouse_box.generic.type = MTYPE_SPINCONTROL;
 	s_options_invertmouse_box.generic.x	= 0;
 	s_options_invertmouse_box.generic.y	= 70;
-	s_options_invertmouse_box.generic.name	= "invert mouse";
+	s_options_invertmouse_box.generic.name	= "invert look";
 	s_options_invertmouse_box.generic.callback = InvertMouseFunc;
 	s_options_invertmouse_box.itemnames = yesno_names;
 
@@ -1368,16 +1382,9 @@ void Options_MenuInit( void )
 	s_options_lookstrafe_box.generic.callback = LookstrafeFunc;
 	s_options_lookstrafe_box.itemnames = yesno_names;
 
-	s_options_freelook_box.generic.type = MTYPE_SPINCONTROL;
-	s_options_freelook_box.generic.x	= 0;
-	s_options_freelook_box.generic.y	= 100;
-	s_options_freelook_box.generic.name	= "free look";
-	s_options_freelook_box.generic.callback = FreeLookFunc;
-	s_options_freelook_box.itemnames = yesno_names;
-
 	s_options_crosshair_box.generic.type = MTYPE_SPINCONTROL;
 	s_options_crosshair_box.generic.x	= 0;
-	s_options_crosshair_box.generic.y	= 110;
+	s_options_crosshair_box.generic.y	= 100;
 	s_options_crosshair_box.generic.name	= "crosshair";
 	s_options_crosshair_box.generic.callback = CrosshairFunc;
 	s_options_crosshair_box.itemnames = crosshair_names;
@@ -1389,12 +1396,31 @@ void Options_MenuInit( void )
 	s_options_noalttab_box.generic.callback = NoAltTabFunc;
 	s_options_noalttab_box.itemnames = yesno_names;
 */
+	#ifdef _3DS
+
+	s_options_circlepadlook_box.generic.type = MTYPE_SPINCONTROL;
+	s_options_circlepadlook_box.generic.x	= 0;
+	s_options_circlepadlook_box.generic.y	= 110;
+	s_options_circlepadlook_box.generic.name	= "circlepad look";
+	s_options_circlepadlook_box.generic.callback = CirclepadLookFunc;
+	s_options_circlepadlook_box.itemnames = yesno_names;
+
+	#else
+
+	s_options_freelook_box.generic.type = MTYPE_SPINCONTROL;
+	s_options_freelook_box.generic.x	= 0;
+	s_options_freelook_box.generic.y	= 110;
+	s_options_freelook_box.generic.name	= "free look";
+	s_options_freelook_box.generic.callback = FreeLookFunc;
+	s_options_freelook_box.itemnames = yesno_names;
+
 	s_options_joystick_box.generic.type = MTYPE_SPINCONTROL;
 	s_options_joystick_box.generic.x	= 0;
 	s_options_joystick_box.generic.y	= 120;
 	s_options_joystick_box.generic.name	= "use joystick";
 	s_options_joystick_box.generic.callback = JoystickFunc;
 	s_options_joystick_box.itemnames = yesno_names;
+	#endif
 
 	s_options_customize_options_action.generic.type	= MTYPE_ACTION;
 	s_options_customize_options_action.generic.x		= 0;
@@ -1417,6 +1443,7 @@ void Options_MenuInit( void )
 	ControlsSetMenuItemValues();
 
 	Menu_AddItem( &s_options_menu, ( void * ) &s_options_sfxvolume_slider );
+
 	#ifndef _3DS
 	Menu_AddItem( &s_options_menu, ( void * ) &s_options_cdvolume_box );
 	Menu_AddItem( &s_options_menu, ( void * ) &s_options_quality_list );
@@ -1425,14 +1452,21 @@ void Options_MenuInit( void )
 	Menu_AddItem( &s_options_menu, ( void * ) &s_options_circlepad_slider );
 	Menu_AddItem( &s_options_menu, ( void * ) &s_options_cstick_slider );
 	#endif
+
 	Menu_AddItem( &s_options_menu, ( void * ) &s_options_sensitivity_slider );
 	Menu_AddItem( &s_options_menu, ( void * ) &s_options_alwaysrun_box );
 	Menu_AddItem( &s_options_menu, ( void * ) &s_options_invertmouse_box );
 	Menu_AddItem( &s_options_menu, ( void * ) &s_options_lookspring_box );
 	Menu_AddItem( &s_options_menu, ( void * ) &s_options_lookstrafe_box );
-	Menu_AddItem( &s_options_menu, ( void * ) &s_options_freelook_box );
 	Menu_AddItem( &s_options_menu, ( void * ) &s_options_crosshair_box );
+
+	#ifndef _3DS
+	Menu_AddItem( &s_options_menu, ( void * ) &s_options_freelook_box );
 	Menu_AddItem( &s_options_menu, ( void * ) &s_options_joystick_box );
+	#else
+	Menu_AddItem( &s_options_menu, ( void * ) &s_options_circlepadlook_box );
+	#endif
+
 	Menu_AddItem( &s_options_menu, ( void * ) &s_options_customize_options_action );
 	Menu_AddItem( &s_options_menu, ( void * ) &s_options_defaults_action );
 	Menu_AddItem( &s_options_menu, ( void * ) &s_options_console_action );

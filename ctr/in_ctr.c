@@ -25,16 +25,21 @@ static touchPosition 	old_touch, touch;
 cvar_t *in_joystick;
 cvar_t *circlepad_sensitivity;
 cvar_t *cstick_sensitivity;
+cvar_t *circlepad_look;
 
 void IN_Init (void)
 {
+	hidInit();
+
 	in_joystick	= Cvar_Get ("in_joystick", "1",	CVAR_ARCHIVE);
 	circlepad_sensitivity = Cvar_Get ("circlepad_sensitivity", "2.0", CVAR_ARCHIVE);
 	cstick_sensitivity = Cvar_Get ("cstick_sensitivity", "2.0", CVAR_ARCHIVE);
+	circlepad_look = Cvar_Get ("circlepad_look", "0", CVAR_ARCHIVE);
 }
 
 void IN_Shutdown (void)
 {
+	hidExit();
 }
 
 void IN_Commands (void)
@@ -57,27 +62,43 @@ void IN_Move (usercmd_t *cmd)
 	if((hidKeysHeld() & KEY_TOUCH) && !keyboard_toggled)
 	{
 		hidTouchRead(&touch);
+
 		if(touch.px < 268)
 		{
-			cl.viewangles[YAW]   -= (touch.px - old_touch.px) * sensitivity->value/2;
-			cl.viewangles[PITCH] += (touch.py - old_touch.py) * sensitivity->value/2;
+			int tx = touch.px - old_touch.px;
+			int ty = touch.py - old_touch.py;
+
+			if(m_pitch->value < 0)
+				ty = -ty;
+
+			cl.viewangles[YAW]   -= abs(tx) > 1 ? tx * sensitivity->value * 0.25f : 0;
+			cl.viewangles[PITCH] += abs(ty) > 1 ? ty * sensitivity->value * 0.25f : 0;;
 		}
+
 		old_touch = touch;
 	}
 
-	if(abs(circlepad.dy) > 15)
+	if(abs(circlepad.dy) > 10)
 	{
 		float y_value = circlepad.dy;
-		cmd->forwardmove += (y_value * circlepad_sensitivity->value) * m_forward->value;
+
+		if( (m_pitch->value < 0) && circlepad_look->value)
+			y_value = -y_value;
+
+		if(circlepad_look->value)
+			cl.viewangles[PITCH] -= y_value * circlepad_sensitivity->value * 0.025f;
+		else
+			cmd->forwardmove += y_value * circlepad_sensitivity->value;
 	}
 
-	if(abs(circlepad.dx) > 15)
+	if(abs(circlepad.dx) > 10)
 	{
 		float x_value = circlepad.dx;
-		if((in_strafe.state & 1) || (lookstrafe->value))
-			cmd->sidemove += (x_value * circlepad_sensitivity->value) * m_forward->value;
+
+		if( ((in_strafe.state & 1) || (lookstrafe->value)) && !circlepad_look->value )
+			cmd->sidemove += x_value * circlepad_sensitivity->value;
 		else
-			cl.viewangles[YAW] -= m_side->value * x_value * 0.025f;
+			cl.viewangles[YAW] -= x_value * circlepad_sensitivity->value * 0.025f;
 	}
 
 	hidCstickRead(&cstick);
@@ -85,8 +106,8 @@ void IN_Move (usercmd_t *cmd)
 	if(m_pitch->value < 0)
 		cstick.dy = -cstick.dy;
 
-	cstick.dx = abs(cstick.dx) < 10 ? 0 : cstick.dx * 0.01 * cstick_sensitivity->value;
-	cstick.dy = abs(cstick.dy) < 10 ? 0 : cstick.dy * 0.01 * cstick_sensitivity->value;
+	cstick.dx = abs(cstick.dx) > 1 ? cstick.dx * cstick_sensitivity->value * 0.01f : 0;
+	cstick.dy = abs(cstick.dy) > 1 ? cstick.dy * cstick_sensitivity->value * 0.01f : 0;
 
 	cl.viewangles[YAW] -= cstick.dx;
 	cl.viewangles[PITCH] -= cstick.dy;
