@@ -18,12 +18,28 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 */
 // common.c -- misc functions used in client and server
-#include "qcommon.h"
 #include <setjmp.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdarg.h>
+#include <limits.h>
+#include <errno.h>
+#ifdef __DJGPP
+#include <libc/file.h>
+#endif
+#ifdef _WIN32
+#include <assert.h>
+#endif
+#include <ctype.h>
+#include "qcommon.h"
 
-#define	MAXPRINTMSG	4096
+#ifdef _WIN32
+#include "../win32/winquake.h"
+#endif
 
-#define MAX_NUM_ARGVS	50
+#define	MAXPRINTMSG	8192 // was 4096
+
+//#define MAX_NUM_ARGVS	50
 
 
 int		com_argc;
@@ -42,18 +58,24 @@ cvar_t	*developer;
 cvar_t	*timescale;
 cvar_t	*fixedtime;
 cvar_t	*logfile_active;	// 1 = buffer log, 2 = flush after each print
+cvar_t	*logfile_name; /* FS: Added */
 cvar_t	*showtrace;
 cvar_t	*dedicated;
+cvar_t	*cfg_default; /* FS: Added */
+
+#ifdef _WIN32 /* FS */
+cvar_t	*win_close_on_error;
+#endif
 
 FILE	*logfile;
 
-int			server_state;
+int		server_state;
 
 // host_speeds times
-int		time_before_game;
-int		time_after_game;
-int		time_before_ref;
-int		time_after_ref;
+int	time_before_game;
+int	time_after_game;
+int	time_before_ref;
+int	time_after_ref;
 
 /*
 ============================================================================
@@ -104,8 +126,9 @@ void Com_Printf (char *fmt, ...)
 	char		msg[MAXPRINTMSG];
 
 	va_start (argptr,fmt);
-	vsprintf (msg,fmt,argptr);
+	Q_vsnprintf (msg, sizeof(msg), fmt, argptr);
 	va_end (argptr);
+	msg[sizeof(msg)-1] = 0;
 
 	if (rd_target)
 	{
@@ -114,28 +137,41 @@ void Com_Printf (char *fmt, ...)
 			rd_flush(rd_target, rd_buffer);
 			*rd_buffer = 0;
 		}
-		strcat (rd_buffer, msg);
+	//	strncat (rd_buffer, msg);
+		Q_strncatz (rd_buffer, msg, rd_buffersize);
 		return;
 	}
 
 	Con_Print (msg);
-		
+
 	// also echo to debugging console
+	if (msg[strlen(msg)-1] != '\r') // skip overwrittten outputs
 	Sys_ConsoleOutput (msg);
 
 	// logfile
 	if (logfile_active && logfile_active->value)
 	{
 		char	name[MAX_QPATH];
-		
+
+		if(!logfile_name->string[0]) /* FS: If it's emtpy, set to default */
+		{
+			Cvar_Set("logfile_name", logfile_name->defaultValue);
+		}
+
 		if (!logfile)
 		{
-			Com_sprintf (name, sizeof(name), "%s/qconsole.log", FS_Gamedir ());
-			logfile = fopen (name, "w");
+			Com_sprintf (name, sizeof(name), "%s/%s", FS_Gamedir (), logfile_name->string);
+
+			FS_CreatePath(name);
+
+			if (logfile_active->value > 2)
+				logfile = fopen (name, "a");
+			else
+				logfile = fopen (name, "w");
 		}
 		if (logfile)
 			fprintf (logfile, "%s", msg);
-		if (logfile_active->value > 1)
+		if (logfile && logfile_active->value > 1)
 			fflush (logfile);		// force it to save every time
 	}
 }
@@ -148,18 +184,28 @@ Com_DPrintf
 A Com_Printf that only shows up if the "developer" cvar is set
 ================
 */
-void Com_DPrintf (char *fmt, ...)
+void Com_DPrintf (unsigned int developerFlags, char *fmt, ...) /* FS: Added developer flags */
 {
 	va_list		argptr;
 	char		msg[MAXPRINTMSG];
+	unsigned int			devValue = 0;
 		
-	if (!developer || !developer->value)
+	if (!developer || !developer->intValue)
 		return;			// don't confuse non-developers with techie stuff...
 
+	devValue = (unsigned int)developer->intValue;
+
+	if (developer->intValue == 1) /* FS: Show all except extremely verbose shit */
+		devValue = 65534;
+
+	if (!(devValue & developerFlags))
+		return;
+
 	va_start (argptr,fmt);
-	vsprintf (msg,fmt,argptr);
+	Q_vsnprintf (msg, sizeof(msg), fmt, argptr);
 	va_end (argptr);
-	
+	msg[sizeof(msg)-1] = 0;
+
 	Com_Printf ("%s", msg);
 }
 
@@ -183,9 +229,10 @@ void Com_Error (int code, char *fmt, ...)
 	recursive = true;
 
 	va_start (argptr,fmt);
-	vsprintf (msg,fmt,argptr);
+	Q_vsnprintf (msg, sizeof(msg), fmt, argptr);
 	va_end (argptr);
-	
+	msg[sizeof(msg)-1] = 0;
+
 	if (code == ERR_DISCONNECT)
 	{
 		CL_Drop ();
@@ -228,6 +275,7 @@ void Com_Quit (void)
 {
 	SV_Shutdown ("Server quit\n", false);
 	CL_Shutdown ();
+	Cmd_Shutdown(); /* FS: Has to come later because CL_Shutdown may run Cmd_RemoveCommand() for some things */
 
 	if (logfile)
 	{
@@ -681,26 +729,26 @@ void MSG_BeginReading (sizebuf_t *msg)
 int MSG_ReadChar (sizebuf_t *msg_read)
 {
 	int	c;
-	
+
 	if (msg_read->readcount+1 > msg_read->cursize)
 		c = -1;
 	else
 		c = (signed char)msg_read->data[msg_read->readcount];
 	msg_read->readcount++;
-	
+
 	return c;
 }
 
 int MSG_ReadByte (sizebuf_t *msg_read)
 {
 	int	c;
-	
+
 	if (msg_read->readcount+1 > msg_read->cursize)
 		c = -1;
 	else
 		c = (unsigned char)msg_read->data[msg_read->readcount];
 	msg_read->readcount++;
-	
+
 	return c;
 }
 
@@ -713,16 +761,16 @@ int MSG_ReadShort (sizebuf_t *msg_read)
 	else		
 		c = (short)(msg_read->data[msg_read->readcount]
 		+ (msg_read->data[msg_read->readcount+1]<<8));
-	
+
 	msg_read->readcount += 2;
-	
+
 	return c;
 }
 
 int MSG_ReadLong (sizebuf_t *msg_read)
 {
 	int	c;
-	
+
 	if (msg_read->readcount+4 > msg_read->cursize)
 		c = -1;
 	else
@@ -730,9 +778,9 @@ int MSG_ReadLong (sizebuf_t *msg_read)
 		+ (msg_read->data[msg_read->readcount+1]<<8)
 		+ (msg_read->data[msg_read->readcount+2]<<16)
 		+ (msg_read->data[msg_read->readcount+3]<<24);
-	
+
 	msg_read->readcount += 4;
-	
+
 	return c;
 }
 
@@ -744,7 +792,7 @@ float MSG_ReadFloat (sizebuf_t *msg_read)
 		float	f;
 		int	l;
 	} dat;
-	
+
 	if (msg_read->readcount+4 > msg_read->cursize)
 		dat.f = -1;
 	else
@@ -755,7 +803,7 @@ float MSG_ReadFloat (sizebuf_t *msg_read)
 		dat.b[3] =	msg_read->data[msg_read->readcount+3];
 	}
 	msg_read->readcount += 4;
-	
+
 	dat.l = LittleLong (dat.l);
 
 	return dat.f;	
@@ -765,19 +813,21 @@ char *MSG_ReadString (sizebuf_t *msg_read)
 {
 	static char	string[2048];
 	int		l,c;
-	
+
 	l = 0;
 	do
 	{
-		c = MSG_ReadChar (msg_read);
+		// sku - replaced MSG_ReadChar with MSG_ReadByte to avoid
+		// potentional vulnerability
+		c = MSG_ReadByte (msg_read);
 		if (c == -1 || c == 0)
 			break;
 		string[l] = c;
 		l++;
 	} while (l < sizeof(string)-1);
-	
+
 	string[l] = 0;
-	
+
 	return string;
 }
 
@@ -785,19 +835,21 @@ char *MSG_ReadStringLine (sizebuf_t *msg_read)
 {
 	static char	string[2048];
 	int		l,c;
-	
+
 	l = 0;
 	do
 	{
-		c = MSG_ReadChar (msg_read);
+		// sku - replaced MSG_ReadChar with MSG_ReadByte to avoid
+		// potentional vulnerability
+		c = MSG_ReadByte (msg_read);
 		if (c == -1 || c == 0 || c == '\n')
 			break;
 		string[l] = c;
 		l++;
 	} while (l < sizeof(string)-1);
-	
+
 	string[l] = 0;
-	
+
 	return string;
 }
 
@@ -893,10 +945,14 @@ void *SZ_GetSpace (sizebuf_t *buf, int length)
 	if (buf->cursize + length > buf->maxsize)
 	{
 		if (!buf->allowoverflow)
+		{
 			Com_Error (ERR_FATAL, "SZ_GetSpace: overflow without allowoverflow set");
+		}
 		
 		if (length > buf->maxsize)
+		{
 			Com_Error (ERR_FATAL, "SZ_GetSpace: %i is > full buffer size", length);
+		}
 			
 		Com_Printf ("SZ_GetSpace: overflow\n");
 		SZ_Clear (buf); 
@@ -1031,10 +1087,10 @@ char *CopyString (char *in)
 	char	*out;
 	
 	out = Z_Malloc (strlen(in)+1);
-	strcpy (out, in);
+//	strncpy (out, in);
+	Q_strncpyz (out, in, strlen(in)+1);
 	return out;
 }
-
 
 
 void Info_Print (char *s)
@@ -1167,7 +1223,10 @@ void *Z_TagMalloc (int size, int tag)
 	size = size + sizeof(zhead_t);
 	z = malloc(size);
 	if (!z)
-		Com_Error (ERR_FATAL, "Z_Malloc: failed on allocation of %i bytes",size);
+	{
+		Com_Error (ERR_FATAL, "Z_Malloc: failed on allocation of %i bytes", size);
+		return NULL;
+	}
 	memset (z, 0, size);
 	z_count++;
 	z_bytes += size;
@@ -1193,65 +1252,7 @@ void *Z_Malloc (int size)
 	return Z_TagMalloc (size, 0);
 }
 
-
 //============================================================================
-
-
-/*
-====================
-COM_BlockSequenceCheckByte
-
-For proxy protecting
-
-// THIS IS MASSIVELY BROKEN!  CHALLENGE MAY BE NEGATIVE
-// DON'T USE THIS FUNCTION!!!!!
-
-====================
-*/
-byte	COM_BlockSequenceCheckByte (byte *base, int length, int sequence, int challenge)
-{
-	Sys_Error("COM_BlockSequenceCheckByte called\n");
-
-#if 0
-	int		checksum;
-	byte	buf[68];
-	byte	*p;
-	float temp;
-	byte c;
-
-	temp = bytedirs[(sequence/3) % NUMVERTEXNORMALS][sequence % 3];
-	temp = LittleFloat(temp);
-	p = ((byte *)&temp);
-
-	if (length > 60)
-		length = 60;
-	memcpy (buf, base, length);
-
-	buf[length] = (sequence & 0xff) ^ p[0];
-	buf[length+1] = p[1];
-	buf[length+2] = ((sequence>>8) & 0xff) ^ p[2];
-	buf[length+3] = p[3];
-
-	temp = bytedirs[((sequence+challenge)/3) % NUMVERTEXNORMALS][(sequence+challenge) % 3];
-	temp = LittleFloat(temp);
-	p = ((byte *)&temp);
-
-	buf[length+4] = (sequence & 0xff) ^ p[3];
-	buf[length+5] = (challenge & 0xff) ^ p[2];
-	buf[length+6] = ((sequence>>8) & 0xff) ^ p[1];
-	buf[length+7] = ((challenge >> 7) & 0xff) ^ p[0];
-
-	length += 8;
-
-	checksum = LittleLong(Com_BlockChecksum (buf, length));
-
-	checksum &= 0xff;
-
-	return checksum;
-#endif
-	return 0;
-}
-
 static byte chktbl[1024] = {
 0x84, 0x47, 0x51, 0xc1, 0x93, 0x22, 0x21, 0x24, 0x2f, 0x66, 0x60, 0x4d, 0xb0, 0x7c, 0xda,
 0x88, 0x54, 0x15, 0x2b, 0xc6, 0x6c, 0x89, 0xc5, 0x9d, 0x48, 0xee, 0xe6, 0x8a, 0xb5, 0xf4,
@@ -1336,12 +1337,17 @@ byte	COM_BlockSequenceCRCByte (byte *base, int length, int sequence)
 
 
 	if (sequence < 0)
-		Sys_Error("sequence < 0, this shouldn't happen\n");
+	{
+		Sys_Error("sequence < 0, this shouldn't happen");
+	}
 
 	p = chktbl + (sequence % (sizeof(chktbl) - 4));
 
 	if (length > 60)
+	{
 		length = 60;
+	}
+
 	memcpy (chkb, base, length);
 
 	chkb[length] = p[0];
@@ -1354,7 +1360,9 @@ byte	COM_BlockSequenceCRCByte (byte *base, int length, int sequence)
 	crc = CRC_Block(chkb, length);
 
 	for (x=0, n=0; n<length; n++)
+	{
 		x += chkb[n];
+	}
 
 	crc = (crc ^ x) & 0xff;
 
@@ -1389,7 +1397,6 @@ void Com_Error_f (void)
 	Com_Error (ERR_FATAL, "%s", Cmd_Argv(1));
 }
 
-
 /*
 =================
 Qcommon_Init
@@ -1398,15 +1405,19 @@ Qcommon_Init
 void Qcommon_Init (int argc, char **argv)
 {
 	char	*s;
+	char	cfgExecString[MAX_QPATH]; /* FS: New default config stuff so we can keep some sanity between DOS and Win32 */
+
 
 	if (setjmp (abortframe) )
+	{
 		Sys_Error ("Qcommon_Init: Error during initialization");
+	}
 
 	z_chain.next = z_chain.prev = &z_chain;
-
 	// prepare enough of the subsystems to handle
 	// cvar and command buffer management
 	COM_InitArgv (argc, argv);
+
 
 	Swap_Init ();
 	Cbuf_Init ();
@@ -1425,17 +1436,31 @@ void Qcommon_Init (int argc, char **argv)
 
 	FS_InitFilesystem ();
 
+	/* FS: New default config stuff so we can keep some sanity between DOS and Win32 */
+#ifdef _3DS
+	cfg_default = Cvar_Get("cfg_default", "q2ctr.cfg", CVAR_NOSET);
+#else
+	cfg_default = Cvar_Get("cfg_default", "q2dos.cfg", CVAR_NOSET);
+#endif
+	Cvar_SetDescription("cfg_default", "Default cfg file to use for this gaming session.  Must be set at run time.");
+	/* FS: If it's NULL or not even at least "a.cfg" length then enforce default values */
+	if(!(cfg_default->string) || (cfg_default->string[0] == 0) || (strlen(cfg_default->string) < 5))
+	{
+		Com_Printf("Warning: invalid cfg_default string.  Setting to default: %s\n", cfg_default->defaultValue);
+		Cvar_ForceSet("cfg_default", cfg_default->defaultValue);
+	}
+
 	Cbuf_AddText ("exec default.cfg\n");
-
-	#ifdef _3DS
-	Sys_DefaultConfig();
-	#endif
-	
-	Cbuf_AddText ("exec config.cfg\n");
-
-	Cbuf_AddEarlyCommands (true);
 	Cbuf_Execute ();
 
+#ifdef _3DS
+	Sys_DefaultConfig();
+#endif
+
+	Com_sprintf(cfgExecString, sizeof(cfgExecString), "exec %s\n", cfg_default->string);
+	Cbuf_AddText (cfgExecString); /* FS: Use our own so other ports won't stomp over it */
+	Cbuf_AddEarlyCommands (true);
+	Cbuf_Execute ();
 
 	//
 	// init commands and vars
@@ -1446,9 +1471,13 @@ void Qcommon_Init (int argc, char **argv)
 	host_speeds = Cvar_Get ("host_speeds", "0", 0);
 	log_stats = Cvar_Get ("log_stats", "0", 0);
 	developer = Cvar_Get ("developer", "0", 0);
+	Cvar_SetDescription("developer", "Enable the use of developer messages. \nAvailable flags:\n  * All flags except verbose messages - 1\n  * Standard msgs - 2\n  * Sound msgs - 4\n  * Network msgs - 8\n  * File IO msgs - 16\n  * Graphics renderer msgs - 32\n  * Game DLL msgs - 64\n  * Memory management msgs - 128\n  * Server msgs - 256\n  * CD Audio msgs - 512\n  * OGG Vorbis msgs - 1024\n  * Physics msgs - 2048\n  * Entity msgs - 4096\n  * Save/Restore msgs - 8192\n  * Currently unused - 16384\n  * Currently unused - 32768\n  * Extremely verbose msgs - 65536\n  * Extremely verbose Gamespy msgs - 131072");
 	timescale = Cvar_Get ("timescale", "1", 0);
 	fixedtime = Cvar_Get ("fixedtime", "0", 0);
 	logfile_active = Cvar_Get ("logfile", "0", 0);
+	Cvar_SetDescription("logfile", "Log console output.  1 -- Overwrite previous existing file.  2 or higher -- Append previous existing file.  Control the name with logfile_name CVAR.");
+	logfile_name = Cvar_Get ("logfile_name", "qconsole.log", 0);
+	Cvar_SetDescription("logfile_name", "File name to create/append for logfile CVAR.");
 	showtrace = Cvar_Get ("showtrace", "0", 0);
 #ifdef DEDICATED_ONLY
 	dedicated = Cvar_Get ("dedicated", "1", CVAR_NOSET);
@@ -1456,12 +1485,19 @@ void Qcommon_Init (int argc, char **argv)
 	dedicated = Cvar_Get ("dedicated", "0", CVAR_NOSET);
 #endif
 
-	s = va("%4.2f %s %s %s", VERSION, CPUSTRING, __DATE__, BUILDSTRING);
+#ifdef _WIN32
+	win_close_on_error = Cvar_Get("win_close_on_error", "0", 0);
+	Cvar_SetDescription("win_close_on_error", "Silently terminate Q2DOS if a Sys_Error() is generated.  Useful for dedicated servers.");
+#endif
+
+	s = va("Q2DOS %4.2f %s %s %s", VERSION, CPUSTRING, __DATE__, BUILDSTRING);
 	Cvar_Get ("version", s, CVAR_SERVERINFO|CVAR_NOSET);
 
 
-	if (dedicated->value)
+	if (dedicated->intValue)
+	{
 		Cmd_AddCommand ("quit", Com_Quit);
+	}
 
 	Sys_Init ();
 
@@ -1471,13 +1507,25 @@ void Qcommon_Init (int argc, char **argv)
 	SV_Init ();
 	CL_Init ();
 
+#ifdef _WIN32
+#ifdef NEW_DED_CONSOLE
+	if (!dedicated->intValue)
+		Sys_ShowConsole(false);
+#endif // NEW_DED_CONSOLE
+#endif // _WIN32
+
 	// add + commands from command line
 	if (!Cbuf_AddLateCommands ())
 	{	// if the user didn't give any commands, run default action
-		if (!dedicated->value)
+		if (!dedicated->intValue)
+		{
 			Cbuf_AddText ("d1\n");
+		}
 		else
+		{
 			Cbuf_AddText ("dedicated_start\n");
+		}
+
 		Cbuf_Execute ();
 	}
 	else
@@ -1497,24 +1545,33 @@ Qcommon_Frame
 void Qcommon_Frame (int msec)
 {
 	char	*s;
-	int		time_before, time_between, time_after;
+	int	time_before = 0;
+	int	time_between = 0;
+	int	time_after = 0;
 
 	if (setjmp (abortframe) )
+	{
 		return;			// an ERR_DROP was thrown
+	}
 
 	if ( log_stats->modified )
 	{
 		log_stats->modified = false;
-		if ( log_stats->value )
+
+		if (log_stats->intValue)
 		{
 			if ( log_stats_file )
 			{
 				fclose( log_stats_file );
 				log_stats_file = 0;
 			}
+
 			log_stats_file = fopen( "stats.log", "w" );
+
 			if ( log_stats_file )
+			{
 				fprintf( log_stats_file, "entities,dlights,parts,frame time\n" );
+			}
 		}
 		else
 		{
@@ -1526,16 +1583,21 @@ void Qcommon_Frame (int msec)
 		}
 	}
 
-	if (fixedtime->value)
-		msec = fixedtime->value;
-	else if (timescale->value)
+	if (fixedtime->intValue)
 	{
-		msec *= timescale->value;
+		msec = fixedtime->intValue;
+	}
+	else if (timescale->intValue)
+	{
+		msec = msec * timescale->intValue;
+
 		if (msec < 1)
+		{
 			msec = 1;
+		}
 	}
 
-	if (showtrace->value)
+	if (showtrace->intValue)
 	{
 		extern	int c_traces, c_brush_traces;
 		extern	int	c_pointcontents;
@@ -1549,26 +1611,36 @@ void Qcommon_Frame (int msec)
 	do
 	{
 		s = Sys_ConsoleInput ();
+
 		if (s)
+		{
 			Cbuf_AddText (va("%s\n",s));
-	} while (s);
+		}
+	}
+	while (s);
+
 	Cbuf_Execute ();
 
-	if (host_speeds->value)
+	if (host_speeds->intValue)
+	{
 		time_before = Sys_Milliseconds ();
+	}
 
 	SV_Frame (msec);
 
-	if (host_speeds->value)
-		time_between = Sys_Milliseconds ();		
+	if (host_speeds->intValue)
+	{
+		time_between = Sys_Milliseconds ();
+	}
 
 	CL_Frame (msec);
 
-	if (host_speeds->value)
-		time_after = Sys_Milliseconds ();		
+	if (host_speeds->intValue)
+	{
+		time_after = Sys_Milliseconds ();
+	}
 
-
-	if (host_speeds->value)
+	if (host_speeds->intValue)
 	{
 		int			all, sv, gm, cl, rf;
 
@@ -1584,6 +1656,21 @@ void Qcommon_Frame (int msec)
 	}	
 }
 
+int Q_toupper (int c) /* FS: Added */
+{
+	if (c>='a' && c<='z')
+		c-=('a'-'A');
+	return(c);
+}
+
+int Q_tolower (int c) /* FS: Added */
+{
+	if (c>='A' && c<='Z')
+		c+=('a'-'A');
+	return(c);
+}
+
+
 /*
 =================
 Qcommon_Shutdown
@@ -1592,3 +1679,171 @@ Qcommon_Shutdown
 void Qcommon_Shutdown (void)
 {
 }
+
+/*
+=================
+StripHighBits
+
+String parsing function from r1q2
+=================
+*/
+void StripHighBits (char *string, int highbits)
+{
+	byte		high;
+	byte		c;
+	char		*p;
+
+	p = string;
+
+	if (highbits)
+		high = 127;
+	else
+		high = 255;
+
+	while (string[0])
+	{
+		c = *(string++);
+
+		if (c >= 32 && c <= high)
+			*p++ = c;
+	}
+
+	p[0] = '\0';
+}
+
+
+/*
+=================
+IsValidChar
+
+Security function from r1q2
+=================
+*/
+qboolean IsValidChar (int c)
+{
+	if (!isalnum(c) && c != '_' && c != '-')
+		return false;
+	return true;
+}
+
+/*
+=================
+ExpandNewLines
+
+String parsing function from r1q2
+=================
+*/
+void ExpandNewLines (char *string)
+{
+	char *q = string;
+	char *s = q;
+
+	if (!string[0])
+		return;
+
+	while (*(q+1))
+	{
+		if (*q == '\\' && *(q+1) == 'n')
+		{
+			*s++ = '\n';
+			q++;
+		}
+		else
+		{
+			*s++ = *q;
+		}
+		q++;
+
+		//crashfix, check if we reached eol on an expansion.
+		if (!*q)
+			break;
+	}
+
+	if (*q)
+		*s++ = *q;
+	*s = '\0';
+}
+
+/*
+=================
+StripQuotes
+
+String parsing function from r1q2
+=================
+*/
+char *StripQuotes (char *string)
+{
+	size_t	i;
+
+	if (!string[0])
+		return string;
+
+	i = strlen(string);
+
+	if (string[0] == '"' && string[i-1] == '"')
+	{
+		string[i-1] = 0;
+		return string + 1;
+	}
+
+	return string;
+}
+
+/*
+=================
+MakePrintable
+
+String parsing function from r1q2
+=================
+*/
+const char *MakePrintable (const void *subject, size_t numchars)
+{
+	int			len;
+	static char printable[4096];
+	char		tmp[8];
+	char		*p;
+	const byte	*s;
+
+	if (!subject)
+	{
+	//	strncpy (printable, "(null)");
+		Q_strncpyz (printable, "(null)", sizeof(printable));
+		return printable;
+	}
+
+	s = (const byte *)subject;
+	p = printable;
+	len = 0;
+
+	if (!numchars)
+	{
+		numchars = strlen((const char *) s);
+	}
+
+	while (numchars--)
+	{
+		if (isprint(s[0]))
+		{
+			*p++ = s[0];
+			len++;
+		}
+		else
+		{
+			sprintf (tmp, "%.3d", s[0]);
+			*p++ = '\\';
+			*p++ = tmp[0];
+			*p++ = tmp[1];
+			*p++ = tmp[2];
+			len += 4;
+		}
+
+		if (len >= sizeof(printable)-5)
+			break;
+
+		s++;
+	}
+
+	printable[len] = 0;
+	return printable;
+}
+

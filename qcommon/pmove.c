@@ -697,9 +697,30 @@ void PM_CatagorizePosition (void)
 
 		if (!trace.ent || (trace.plane.normal[2] < 0.7 && !trace.startsolid) )
 		{
-			pm->groundentity = NULL;
-			pm->s.pm_flags &= ~PMF_ON_GROUND;
+// Knightmare added: Jitspoe's fix for sliding along steeply sloped surfaces that meet floors
+			trace_t      trace2;
+			vec3_t      mins, maxs;
+			
+			// try a slightly smaller bounding box -- this is to fix getting stuck up
+			// on angled walls and not being able to move (like you're stuck in the air)
+			mins[0] = pm->mins[0] ? pm->mins[0] + 1 : 0;
+			mins[1] = pm->mins[1] ? pm->mins[1] + 1 : 0;
+			mins[2] = pm->mins[2];
+			maxs[0] = pm->maxs[0] ? pm->maxs[0] - 1 : 0;
+			maxs[1] = pm->maxs[1] ? pm->maxs[1] - 1 : 0;
+			maxs[2] = pm->maxs[2];
+			trace2 = pm->trace(pml.origin, mins, maxs, point);
+			
+			if (!(trace2.plane.normal[2] < 0.7f && !trace2.startsolid))
+			{
+				memcpy(&trace, &trace2, sizeof(trace));
+				pml.groundplane = trace.plane;
+				pml.groundsurface = trace.surface;
+				pml.groundcontents = trace.contents;
+				pm->groundentity = trace.ent;
+			}
 		}
+// end Jitspoe's fix
 		else
 		{
 			pm->groundentity = trace.ent;
@@ -1117,7 +1138,7 @@ void PM_SnapPosition (void)
 
 	// go back to the last position
 	VectorCopy (pml.previous_origin, pm->s.origin);
-//	Com_DPrintf ("using previous_origin\n");
+//	Com_DPrintf(DEVELOPER_MSG_PHYSICS, "using previous_origin\n");
 }
 
 #if 0
@@ -1156,7 +1177,7 @@ void PM_InitialSnapPosition (void)
 		}
 	}
 
-	Com_DPrintf ("Bad InitialSnapPosition\n");
+	Com_DPrintf(DEVELOPER_MSG_PHYSICS, "Bad InitialSnapPosition\n");
 }
 #else
 /*
@@ -1190,7 +1211,7 @@ void PM_InitialSnapPosition(void)
 		}
 	}
 
-	Com_DPrintf ("Bad InitialSnapPosition\n");
+	Com_DPrintf(DEVELOPER_MSG_PHYSICS, "Bad InitialSnapPosition\n");
 }
 
 #endif

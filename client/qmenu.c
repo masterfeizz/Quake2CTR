@@ -26,12 +26,12 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 static void	 Action_DoEnter( menuaction_s *a );
 static void	 Action_Draw( menuaction_s *a );
 static void  Menu_DrawStatusBar( const char *string );
-static void	 Menulist_DoEnter( menulist_s *l );
+//static void	 Menulist_DoEnter( menulist_s *l ); /* FS: Unusued */
 static void	 MenuList_Draw( menulist_s *l );
 static void	 Separator_Draw( menuseparator_s *s );
 static void	 Slider_DoSlide( menuslider_s *s, int dir );
 static void	 Slider_Draw( menuslider_s *s );
-static void	 SpinControl_DoEnter( menulist_s *s );
+//static void	 SpinControl_DoEnter( menulist_s *s ); /* FS: Unused */
 static void	 SpinControl_Draw( menulist_s *s );
 static void	 SpinControl_DoSlide( menulist_s *s, int dir );
 
@@ -181,37 +181,35 @@ qboolean Field_Key( menufield_s *f, int key )
 		break;
 	}
 
-	if ( key > 127 )
-	{
-		switch ( key )
-		{
-		case K_DEL:
-		default:
-			return false;
-		}
-	}
-
 	/*
 	** support pasting from the clipboard
 	*/
-	if ( ( toupper( key ) == 'V' && keydown[K_CTRL] ) ||
-		 ( ( ( key == K_INS ) || ( key == K_KP_INS ) ) && keydown[K_SHIFT] ) )
+	if ( ((key == 'V' || key == 'v') && keydown[K_CTRL]) ||
+		 ((key == K_INS || key == K_KP_INS) && keydown[K_SHIFT]) )
 	{
-		char *cbd;
-		
-		if ( ( cbd = Sys_GetClipboardData() ) != 0 )
+		static const char *seperators = "\n\r\b";
+		char *cbd, *cbdPtr;
+		if ((cbd = Sys_GetClipboardData()) != NULL)
 		{
-			strtok( cbd, "\n\r\b" );
-
+			strtok_r(cbd, seperators, &cbdPtr);
 			strncpy( f->buffer, cbd, f->length - 1 );
 			f->cursor = strlen( f->buffer );
 			f->visible_offset = f->cursor - f->visible_length;
 			if ( f->visible_offset < 0 )
 				f->visible_offset = 0;
-
 			free( cbd );
 		}
 		return true;
+	}
+
+	if (key > 127)
+	{
+		switch (key)
+		{
+			case K_DEL:
+			default:
+				return false;
+		}
 	}
 
 	switch ( key )
@@ -418,7 +416,6 @@ void Menu_DrawStatusBar( const char *string )
 	if ( string )
 	{
 		int l = strlen( string );
-		int maxrow = VID_HEIGHT / 8;
 		int maxcol = VID_WIDTH / 8;
 		int col = maxcol / 2 - l / 2;
 
@@ -434,8 +431,11 @@ void Menu_DrawStatusBar( const char *string )
 void Menu_DrawString( int x, int y, const char *string )
 {
 	unsigned i;
+	int len;
 
-	for ( i = 0; i < strlen( string ); i++ )
+	len = strlen(string);
+
+	for ( i = 0; i < len; i++ )
 	{
 		Draw_Char( ( x + i*8 ), y, string[i] );
 	}
@@ -444,8 +444,11 @@ void Menu_DrawString( int x, int y, const char *string )
 void Menu_DrawStringDark( int x, int y, const char *string )
 {
 	unsigned i;
+	int len;
 
-	for ( i = 0; i < strlen( string ); i++ )
+	len = strlen(string);
+
+	for ( i = 0; i < len; i++ )
 	{
 		Draw_Char( ( x + i*8 ), y, string[i] + 128 );
 	}
@@ -454,20 +457,26 @@ void Menu_DrawStringDark( int x, int y, const char *string )
 void Menu_DrawStringR2L( int x, int y, const char *string )
 {
 	unsigned i;
+	int len;
 
-	for ( i = 0; i < strlen( string ); i++ )
+	len = strlen(string);
+
+	for ( i = 0; i < len; i++ )
 	{
-		Draw_Char( ( x - i*8 ), y, string[strlen(string)-i-1] );
+		Draw_Char( ( x - i*8 ), y, string[len-i-1] );
 	}
 }
 
 void Menu_DrawStringR2LDark( int x, int y, const char *string )
 {
 	unsigned i;
+	int len;
 
-	for ( i = 0; i < strlen( string ); i++ )
+	len = strlen(string);
+
+	for ( i = 0; i < len; i++ )
 	{
-		Draw_Char( ( x - i*8 ), y, string[strlen(string)-i-1]+128 );
+		Draw_Char( ( x - i*8 ), y, string[len-i-1]+128 );
 	}
 }
 
@@ -552,6 +561,7 @@ int Menu_TallySlots( menuframework_s *menu )
 	return total;
 }
 
+#if 0 /* FS: Unused */
 void Menulist_DoEnter( menulist_s *l )
 {
 	int start;
@@ -563,6 +573,7 @@ void Menulist_DoEnter( menulist_s *l )
 	if ( l->generic.callback )
 		l->generic.callback( l );
 }
+#endif
 
 void MenuList_Draw( menulist_s *l )
 {
@@ -625,6 +636,7 @@ void Slider_Draw( menuslider_s *s )
 	Draw_Char( ( int ) ( 8 + RCOLUMN_OFFSET + s->generic.parent->x + s->generic.x + (SLIDER_RANGE-1)*8 * s->range ), s->generic.y + s->generic.parent->y, 131);
 }
 
+#if 0 /* FS: Unused */
 void SpinControl_DoEnter( menulist_s *s )
 {
 	s->curvalue++;
@@ -634,6 +646,7 @@ void SpinControl_DoEnter( menulist_s *s )
 	if ( s->generic.callback )
 		s->generic.callback( s );
 }
+#endif
 
 void SpinControl_DoSlide( menulist_s *s, int dir )
 {

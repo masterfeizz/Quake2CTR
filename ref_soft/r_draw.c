@@ -58,6 +58,12 @@ Draw_InitLocal
 void Draw_InitLocal (void)
 {
 	draw_chars = Draw_FindPic ("conchars");
+	// Knightmare- error out instead of crashing if we can't load this
+	if (!draw_chars)
+	{
+		ri.Sys_Error (ERR_FATAL, "Couldn't load pics/conchars.pcx");
+	}
+	// end Knightmare
 }
 
 
@@ -224,7 +230,7 @@ void Draw_StretchPic (int x, int y, int w, int h, char *name)
 	pic = Draw_FindPic (name);
 	if (!pic)
 	{
-		ri.Con_Printf (PRINT_ALL, "Can't find pic: %s\n", name);
+		ri.Con_Printf (PRINT_DEVELOPER, "Can't find pic: %s\n", name); // FS: Changed
 		return;
 	}
 	Draw_StretchPicImplementation (x, y, w, h, pic);
@@ -261,7 +267,7 @@ void Draw_Pic (int x, int y, char *name)
 	pic = Draw_FindPic (name);
 	if (!pic)
 	{
-		ri.Con_Printf (PRINT_ALL, "Can't find pic: %s\n", name);
+		ri.Con_Printf (PRINT_DEVELOPER, "Can't find pic: %s\n", name); // FS: Changed
 		return;
 	}
 
@@ -370,7 +376,7 @@ void Draw_TileClear (int x, int y, int w, int h, char *name)
 	pic = Draw_FindPic (name);
 	if (!pic)
 	{
-		ri.Con_Printf (PRINT_ALL, "Can't find pic: %s\n", name);
+		ri.Con_Printf (PRINT_DEVELOPER, "Can't find pic: %s\n", name); // FS: Changed
 		return;
 	}
 	x2 = x + w;

@@ -34,19 +34,21 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #define TICKS_PER_MSEC 268111.856
 
-int	curtime;
+int __stacksize__ = 3 * 1024 * 1024;
+
+int		curtime;
 unsigned	sys_frame_time;
 
-int		hunkcount;
-
 static byte	*membase;
-static int		hunkmaxsize;
-static int		cursize;
+static int	hunkmaxsize;
+static int	cursize;
 
 void *GetGameAPI (void *import);
 
 void Sys_Error (char *error, ...)
 {
+	consoleInit(GFX_BOTTOM, NULL);
+
 	va_list		argptr;
 
 	printf ("Sys_Error: ");	
@@ -95,16 +97,6 @@ void Sys_ConsoleOutput (char *string)
 
 void Sys_DefaultConfig(void)
 {
-	uint8_t isN3DS;
-
-	APT_CheckNew3DS(&isN3DS);
-
-	if(isN3DS != 1)
-	{
-		Cbuf_AddText("viewsize 80\n");
-		Cbuf_AddText("sw_mipcap 1\n");
-	}
-
 	Cbuf_AddText ("bind PADUP \"invuse\"\n");
 	Cbuf_AddText ("bind PADDOWN \"invdrop\"\n");
 	Cbuf_AddText ("bind PADLEFT \"invprev\"\n");
@@ -124,48 +116,56 @@ void Sys_DefaultConfig(void)
 	Cbuf_AddText ("lookstrafe \"1.000000\"\n");
 	Cbuf_AddText ("lookspring \"0.000000\"\n");
 	Cbuf_AddText ("gamma \"0.700000\"\n");
+
+	Cbuf_Execute();
 }
 
-void Sys_SetKeys(u32 keys, u32 state){
+void Sys_SetKeys(u32 keys, u32 state, u32 grab_time)
+{
+
 	if( keys & KEY_SELECT)
-		Key_Event(K_ESCAPE, state, Sys_Milliseconds());
+		Key_Event(K_ESCAPE, state, grab_time);
 	if( keys & KEY_START)
-		Key_Event(K_ENTER, state, Sys_Milliseconds());
+		Key_Event(K_ENTER, state, grab_time);
 	if( keys & KEY_DUP)
-		Key_Event(K_UPARROW, state, Sys_Milliseconds());
+		Key_Event(K_UPARROW, state, grab_time);
 	if( keys & KEY_DDOWN)
-		Key_Event(K_DOWNARROW, state, Sys_Milliseconds());
+		Key_Event(K_DOWNARROW, state, grab_time);
 	if( keys & KEY_DLEFT)
-		Key_Event(K_LEFTARROW, state, Sys_Milliseconds());
+		Key_Event(K_LEFTARROW, state, grab_time);
 	if( keys & KEY_DRIGHT)
-		Key_Event(K_RIGHTARROW, state, Sys_Milliseconds());
+		Key_Event(K_RIGHTARROW, state, grab_time);
 	if( keys & KEY_Y)
-		Key_Event(K_AUX4, state, Sys_Milliseconds());
+		Key_Event(K_AUX4, state, grab_time);
 	if( keys & KEY_X)
-		Key_Event(K_AUX3, state, Sys_Milliseconds());
+		Key_Event(K_AUX3, state, grab_time);
 	if( keys & KEY_B)
-		Key_Event(K_AUX2, state, Sys_Milliseconds());
+		Key_Event(K_AUX2, state, grab_time);
 	if( keys & KEY_A)
-		Key_Event(K_AUX1, state, Sys_Milliseconds());
+		Key_Event(K_AUX1, state, grab_time);
 	if( keys & KEY_L)
-		Key_Event(K_AUX5, state, Sys_Milliseconds());
+		Key_Event(K_AUX5, state, grab_time);
 	if( keys & KEY_R)
-		Key_Event(K_AUX7, state, Sys_Milliseconds());
+		Key_Event(K_AUX7, state, grab_time);
 	if( keys & KEY_ZL)
-		Key_Event(K_AUX6, state, Sys_Milliseconds());
+		Key_Event(K_AUX6, state, grab_time);
 	if( keys & KEY_ZR)
-		Key_Event(K_AUX8, state, Sys_Milliseconds());
+		Key_Event(K_AUX8, state, grab_time);
 }
 
 void Sys_SendKeyEvents (void)
 {
 	hidScanInput();
+
+	u32 grab_time = Sys_Milliseconds();
+
 	u32 kDown = hidKeysDown();
-	u32 kUp = hidKeysUp();
+	u32 kUp   = hidKeysUp();
+
 	if(kDown)
-		Sys_SetKeys(kDown, true);
+		Sys_SetKeys(kDown, true, grab_time);
 	if(kUp)
-		Sys_SetKeys(kUp, false);
+		Sys_SetKeys(kUp,  false, grab_time);
 
 	sys_frame_time = Sys_Milliseconds();
 }
@@ -254,7 +254,8 @@ void Sys_Mkdir (char *path)
 	mkdir (path, 0777);
 }
 
-void Sys_MkdirRecursive(char *path) {
+void Sys_MkdirRecursive(char *path)
+{
         char tmp[256];
         char *p = NULL;
         size_t len;
@@ -369,6 +370,9 @@ void	Sys_Init (void)
 	Touch_DrawOverlay();
 }
 
+void Sys_Sleep (unsigned msec)
+{
+}
 
 //=============================================================================
 
@@ -378,13 +382,22 @@ int main (int argc, char **argv)
 
 	romfsInit();
 
-	APT_SetAppCpuTimeLimit(30);
 	osSetSpeedupEnable(true);
 
-	gfxInit(GSP_RGB565_OES,GSP_RGB565_OES,false);
-	gfxSetDoubleBuffering(GFX_TOP, true);
+	gfxInit(GSP_BGR8_OES,GSP_RGB565_OES,false);
 	gfxSetDoubleBuffering(GFX_BOTTOM, false);
 	gfxSwapBuffersGpu();
+	
+	uint8_t model;
+
+	cfguInit();
+	CFGU_GetSystemModel(&model);
+	cfguExit();
+	
+	if(model != CFG_MODEL_2DS)
+		gfxSetWide(true);
+
+	pglInitEx(0x040000, 0x100000);
 
 	Sys_MkdirRecursive("sdmc:/3ds/quake2/baseq2");
 	chdir("sdmc:/3ds/quake2/");

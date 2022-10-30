@@ -21,8 +21,16 @@ MASK_1K	equ		03FFh
 _DATA SEGMENT	
 
  align 4	
-;p10_minus_p20 dd 0
-;p01_minus_p21 dd 0
+p00_minus_p20 dd 0
+p01_minus_p21 dd 0
+p10_minus_p20 dd 0
+p11_minus_p21 dd 0
+t0 dd 0
+t0_int dd 0
+t1 dd 0
+t1_int dd 0
+xstepdenominv dd 0
+ystepdenominv dd 0
 ;temp0 dd 0
 ;temp1 dd 0
 ;Ltemp dd 0
@@ -42,8 +50,265 @@ lzistepx dd 0
 ;PGM
 
 _DATA ENDS
-_TEXT SEGMENT	
 
+_TEXT SEGMENT	
+_skinwidth	equ	8
+ public _R_PolysetCalcGradients
+_R_PolysetCalcGradients:
+ push ebp
+ mov ebp, esp
+ push ebx
+
+;
+; p00_minus_p20 = r_p0[0] - r_p2[0];
+; p01_minus_p21 = r_p0[1] - r_p2[1];
+; p10_minus_p20 = r_p1[0] - r_p2[0];
+; p11_minus_p21 = r_p1[1] - r_p2[1];
+;
+
+ mov eax, dword ptr [_r_p0+0]
+ mov ebx, dword ptr [_r_p0+4]
+ sub eax, dword ptr [_r_p2+0]
+ sub ebx, dword ptr [_r_p2+4]
+ mov dword ptr p00_minus_p20, eax
+ mov dword ptr p01_minus_p21, ebx
+ fild dword ptr p00_minus_p20
+ fild dword ptr p01_minus_p21
+ mov eax, dword ptr [_r_p1+0]
+ mov ebx, dword ptr [_r_p1+4]
+ sub eax, dword ptr [_r_p2+0]
+ sub ebx, dword ptr [_r_p2+4]
+ fstp dword ptr p01_minus_p21
+ fstp dword ptr p00_minus_p20
+ mov dword ptr p10_minus_p20, eax
+ mov dword ptr p11_minus_p21, ebx
+ fild dword ptr p10_minus_p20
+ fild dword ptr p11_minus_p21
+ fstp dword ptr p11_minus_p21
+ fstp dword ptr p10_minus_p20
+;
+; xstepdenominv = 1.0 / (float)d_xdenom;
+;
+; ystepdenominv = -xstepdenominv;
+;
+
+;
+; put FPU in single precision ceil mode
+;
+
+ fldcw word ptr _fpu_sp24_ceil_cw
+
+ fild dword ptr _d_xdenom            ; d_xdenom
+ fdivr dword ptr float_1             ; 1 / d_xdenom
+ fst dword ptr xstepdenominv         ; 
+ fmul dword ptr float_minus_1        ; -( 1 / d_xdenom )
+
+; ceil () for light so positive steps are exaggerated, negative steps
+; diminished,  pushing us away from underflow toward overflow. Underflow is
+; very visible, overflow is very unlikely, because of ambient lighting
+;
+; t0 = r_p0[4] - r_p2[4];
+; t1 = r_p1[4] - r_p2[4];
+; r_lstepx = (int)
+; 		ceil((t1 * p01_minus_p21 - t0 * p11_minus_p21) * xstepdenominv);
+; r_lstepy = (int)
+; 		ceil((t1 * p00_minus_p20 - t0 * p10_minus_p20) * ystepdenominv);
+;
+ mov eax, dword ptr [_r_p0+16]
+ mov ebx, dword ptr [_r_p1+16]
+ sub eax, dword ptr [_r_p2+16]
+ sub ebx, dword ptr [_r_p2+16]
+
+ fstp dword ptr ystepdenominv       ; (empty)
+
+ mov dword ptr t0_int, eax
+ mov dword ptr t1_int, ebx
+ fild dword ptr t0_int              ; t0
+ fild dword ptr t1_int              ; t1 | t0
+ fxch st(1)                         ; t0 | t1
+ fstp dword ptr t0                  ; t1
+ fst dword ptr t1                   ; t1
+ fmul dword ptr p01_minus_p21       ; t1 * p01_minus_p21
+ fld dword ptr t0                   ; t0 | t1 * p01_minus_p21
+ fmul dword ptr p11_minus_p21       ; t0 * p11_minus_p21 | t1 * p01_minus_p21
+ fld dword ptr t1                   ; t1 | t0 * p11_minus_p21 | t1 * p01_minus_p21
+ fmul dword ptr p00_minus_p20       ; t1 * p00_minus_p20 | t0 * p11_minus_p21 | t1 * p01_minus_p21
+ fld dword ptr t0                   ; t0 | t1 * p00_minus_p20 | t0 * p11_minus_p21 | t1 * p01_minus_p21
+ fmul dword ptr p10_minus_p20       ; t0 * p10_minus_p20 | t1 * p00_minus_p20 | t0 * p11_minus_p21 | t1 * p01_minus_p21
+ fxch st(2)                         ; t0 * p11_minus_p21 | t0 * p10_minus_p20 | t1 * p00_minus_p20 | t1 * p01_minus_p21
+ fsubp st(3), st(0)                 ; t0 * p10_minus_p20 | t1 * p00_minus_p20 | t1 * p01_minus_p21 - t0 * p11_minus_p21
+ fsubrp st(1), st(0)                ; t1 * p00_minus_p20 - t0 * p10_minus_p20 | t1 * p01_minus_p21 - t0 * p11_minus_p21
+ fxch st(1)                         ; t1 * p01_minus_p21 - t0 * p11_minus_p21 | t1 * p00_minus_p20 - t0 * p10_minus_p20
+ fmul dword ptr xstepdenominv       ; r_lstepx | t1 * p00_minus_p20 - t0 * p10_minus_p20
+ fxch st(1)
+ fmul dword ptr ystepdenominv       ; r_lstepy | r_lstepx
+ fxch st(1)                         ; r_lstepx | r_lstepy
+ fistp dword ptr _r_lstepx
+ fistp dword ptr _r_lstepy
+
+;
+; put FPU back into extended precision chop mode
+;
+ fldcw word ptr _fpu_chop_cw
+
+;
+; t0 = r_p0[2] - r_p2[2];
+; t1 = r_p1[2] - r_p2[2];
+; r_sstepx = (int)((t1 * p01_minus_p21 - t0 * p11_minus_p21) *
+; 		xstepdenominv);
+; r_sstepy = (int)((t1 * p00_minus_p20 - t0* p10_minus_p20) *
+; 		ystepdenominv);
+;
+ mov eax, dword ptr [_r_p0+8]
+ mov ebx, dword ptr [_r_p1+8]
+ sub eax, dword ptr [_r_p2+8]
+ sub ebx, dword ptr [_r_p2+8]
+ mov dword ptr t0_int, eax
+ mov dword ptr t1_int, ebx
+ fild dword ptr t0_int              ; t0
+ fild dword ptr t1_int              ; t1 | t0
+ fxch st(1)                         ; t0 | t1
+ fstp dword ptr t0                  ; t1
+ fst dword ptr t1                   ; (empty)
+
+ fmul dword ptr p01_minus_p21       ; t1 * p01_minus_p21
+ fld dword ptr t0                   ; t0 | t1 * p01_minus_p21
+ fmul dword ptr p11_minus_p21       ; t0 * p11_minus_p21 | t1 * p01_minus_p21
+ fld dword ptr t1                   ; t1 | t0 * p11_minus_p21 | t1 * p01_minus_p21
+ fmul dword ptr p00_minus_p20       ; t1 * p00_minus_p20 | t0 * p11_minus_p21 | t1 * p01_minus_p21
+ fld dword ptr t0                   ; t0 | t1 * p00_minus_p20 | t0 * p11_minus_p21 | t1 * p01_minus_p21
+ fmul dword ptr p10_minus_p20       ; t0 * p10_minus_p20 | t1 * p00_minus_p20 | t0 * p11_minus_p21 | t1 * p01_minus_p21
+ fxch st(2)                         ; t0 * p11_minus_p21 | t0 * p10_minus_p20 | t1 * p00_minus_p20 | t1 * p01_minus_p21
+ fsubp	st(3), st(0)                ; t0 * p10_minus_p20 | t1 * p00_minus_p20 | t1 * p01_minus_p21 - t0 * p11_minus_p21
+ fsubrp	st(1), st(0)                ; t1 * p00_minus_p20 - t0 * p10_minus_p20 | t1 * p01_minus_p21 - t0 * p11_minus_p21
+ fxch st(1)                         ; t1 * p01_minus_p21 - t0 * p11_minus_p21 | t1 * p00_minus_p20 - t0 * p10_minus_p20
+ fmul dword ptr xstepdenominv       ; r_lstepx | t1 * p00_minus_p20 - t0 * p10_minus_p20
+ fxch st(1)
+ fmul dword ptr ystepdenominv       ; r_lstepy | r_lstepx
+ fxch st(1)                         ; r_lstepx | r_lstepy
+ fistp dword ptr [_r_sstepx]
+ fistp dword ptr [_r_sstepy]
+
+;
+; t0 = r_p0[3] - r_p2[3];
+; t1 = r_p1[3] - r_p2[3];
+; r_tstepx = (int)((t1 * p01_minus_p21 - t0 * p11_minus_p21) *
+; 		xstepdenominv);
+; r_tstepy = (int)((t1 * p00_minus_p20 - t0 * p10_minus_p20) *
+; 		ystepdenominv);
+;
+ mov eax, dword ptr [_r_p0+12]
+ mov ebx, dword ptr [_r_p1+12]
+ sub eax, dword ptr [_r_p2+12]
+ sub ebx, dword ptr [_r_p2+12]
+
+ mov dword ptr t0_int, eax
+ mov dword ptr t1_int, ebx
+ fild dword ptr t0_int             ; t0
+ fild dword ptr t1_int             ; t1 | t0
+ fxch st(1)                        ; t0 | t1
+ fstp dword ptr t0                 ; t1
+ fst dword ptr t1                  ; (empty)
+
+ fmul dword ptr p01_minus_p21      ; t1 * p01_minus_p21
+ fld dword ptr t0                  ; t0 | t1 * p01_minus_p21
+ fmul dword ptr p11_minus_p21      ; t0 * p11_minus_p21 | t1 * p01_minus_p21
+ fld dword ptr t1                  ; t1 | t0 * p11_minus_p21 | t1 * p01_minus_p21
+ fmul dword ptr p00_minus_p20      ; t1 * p00_minus_p20 | t0 * p11_minus_p21 | t1 * p01_minus_p21
+ fld dword ptr t0                  ; t0 | t1 * p00_minus_p20 | t0 * p11_minus_p21 | t1 * p01_minus_p21
+ fmul dword ptr p10_minus_p20      ; t0 * p10_minus_p20 | t1 * p00_minus_p20 | t0 * p11_minus_p21 | t1 * p01_minus_p21
+ fxch st(2)                        ; t0 * p11_minus_p21 | t0 * p10_minus_p20 | t1 * p00_minus_p20 | t1 * p01_minus_p21
+ fsubp st(3), st(0)                ; t0 * p10_minus_p20 | t1 * p00_minus_p20 | t1 * p01_minus_p21 - t0 * p11_minus_p21
+ fsubrp st(1), st(0)               ; t1 * p00_minus_p20 - t0 * p10_minus_p20 | t1 * p01_minus_p21 - t0 * p11_minus_p21
+ fxch st(1)                        ; t1 * p01_minus_p21 - t0 * p11_minus_p21 | t1 * p00_minus_p20 - t0 * p10_minus_p20
+ fmul dword ptr xstepdenominv      ; r_lstepx | t1 * p00_minus_p20 - t0 * p10_minus_p20
+ fxch st(1)
+ fmul dword ptr ystepdenominv      ; r_lstepy | r_lstepx
+ fxch st(1)                        ; r_lstepx | r_lstepy
+ fistp dword ptr _r_tstepx
+ fistp dword ptr _r_tstepy
+
+;
+; t0 = r_p0[5] - r_p2[5];
+; t1 = r_p1[5] - r_p2[5];
+; r_zistepx = (int)((t1 * p01_minus_p21 - t0 * p11_minus_p21) *
+; 		xstepdenominv);
+; r_zistepy = (int)((t1 * p00_minus_p20 - t0 * p10_minus_p20) *
+; 		ystepdenominv);
+;
+ mov eax, dword ptr [_r_p0+20]
+ mov ebx, dword ptr [_r_p1+20]
+ sub eax, dword ptr [_r_p2+20]
+ sub ebx, dword ptr [_r_p2+20]
+
+ mov dword ptr t0_int, eax
+ mov dword ptr t1_int, ebx
+ fild dword ptr t0_int             ; t0
+ fild dword ptr t1_int             ; t1 | t0
+ fxch st(1)                        ; t0 | t1
+ fstp dword ptr t0                 ; t1
+ fst dword ptr t1                  ; (empty)
+
+ fmul dword ptr p01_minus_p21      ; t1 * p01_minus_p21
+ fld dword ptr t0                  ; t0 | t1 * p01_minus_p21
+ fmul dword ptr p11_minus_p21      ; t0 * p11_minus_p21 | t1 * p01_minus_p21
+ fld dword ptr t1                  ; t1 | t0 * p11_minus_p21 | t1 * p01_minus_p21
+ fmul dword ptr p00_minus_p20      ; t1 * p00_minus_p20 | t0 * p11_minus_p21 | t1 * p01_minus_p21
+ fld dword ptr t0                  ; t0 | t1 * p00_minus_p20 | t0 * p11_minus_p21 | t1 * p01_minus_p21
+ fmul dword ptr p10_minus_p20      ; t0 * p10_minus_p20 | t1 * p00_minus_p20 | t0 * p11_minus_p21 | t1 * p01_minus_p21
+ fxch st(2)                        ; t0 * p11_minus_p21 | t0 * p10_minus_p20 | t1 * p00_minus_p20 | t1 * p01_minus_p21
+ fsubp st(3), st(0)                ; t0 * p10_minus_p20 | t1 * p00_minus_p20 | t1 * p01_minus_p21 - t0 * p11_minus_p21
+ fsubrp st(1), st(0)               ; t1 * p00_minus_p20 - t0 * p10_minus_p20 | t1 * p01_minus_p21 - t0 * p11_minus_p21
+ fxch st(1)                        ; t1 * p01_minus_p21 - t0 * p11_minus_p21 | t1 * p00_minus_p20 - t0 * p10_minus_p20
+ fmul dword ptr xstepdenominv      ; r_lstepx | t1 * p00_minus_p20 - t0 * p10_minus_p20
+ fxch st(1)
+ fmul dword ptr ystepdenominv      ; r_lstepy | r_lstepx
+ fxch st(1)                        ; r_lstepx | r_lstepy
+ fistp dword ptr [_r_zistepx]
+ fistp dword ptr [_r_zistepy]
+
+;
+; #if	id386ALIAS
+; 	a_sstepxfrac = r_sstepx << 16;
+; 	a_tstepxfrac = r_tstepx << 16;
+; #else
+; 	a_sstepxfrac = r_sstepx & 0xFFFF;
+; 	a_tstepxfrac = r_tstepx & 0xFFFF;
+; #endif
+;
+ mov eax, dword ptr _d_pdrawspans
+ cmp eax, offset _R_PolysetDrawSpans8_Opaque
+ mov eax, dword ptr _r_sstepx
+ mov ebx, dword ptr _r_tstepx
+ jne translucent
+; #if id386ALIAS
+ shl eax, 16
+ shl ebx, 16
+ jmp done_with_steps
+; #else
+translucent:
+ and eax, 65536
+ and ebx, 65536
+; #endif
+done_with_steps:
+ mov dword ptr _a_sstepxfrac, eax
+ mov dword ptr _a_tstepxfrac, ebx
+
+;
+; a_ststepxwhole = skinwidth * (r_tstepx >> 16) + (r_sstepx >> 16);
+;
+ mov ebx, dword ptr _r_tstepx
+ mov ecx, dword ptr _r_sstepx
+ sar ebx, 16
+ mov eax, dword ptr _skinwidth[ebp]
+ mul ebx
+ sar ecx, 16
+ add eax, ecx
+ mov dword ptr _a_ststepxwhole, eax
+
+ pop ebx
+ pop ebp
+ ret
 
 ;----------------------------------------------------------------------
 ; 8-bpp horizontal span drawing code for affine polygons, with smooth

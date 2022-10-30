@@ -22,6 +22,7 @@ void Touch_Update();
 
 static circlePosition 	cstick, circlepad;
 static touchPosition 	old_touch, touch;
+
 cvar_t *in_joystick;
 cvar_t *circlepad_sensitivity;
 cvar_t *cstick_sensitivity;
@@ -29,8 +30,6 @@ cvar_t *circlepad_look;
 
 void IN_Init (void)
 {
-	hidInit();
-
 	in_joystick	= Cvar_Get ("in_joystick", "1",	CVAR_ARCHIVE);
 	circlepad_sensitivity = Cvar_Get ("circlepad_sensitivity", "2.0", CVAR_ARCHIVE);
 	cstick_sensitivity = Cvar_Get ("cstick_sensitivity", "2.0", CVAR_ARCHIVE);
@@ -39,7 +38,6 @@ void IN_Init (void)
 
 void IN_Shutdown (void)
 {
-	hidExit();
 }
 
 void IN_Commands (void)
@@ -53,7 +51,6 @@ void IN_Frame (void)
 
 void IN_Move (usercmd_t *cmd)
 {
-
 	hidCircleRead(&circlepad);
 
 	if(hidKeysDown() & KEY_TOUCH)
@@ -72,7 +69,7 @@ void IN_Move (usercmd_t *cmd)
 				ty = -ty;
 
 			cl.viewangles[YAW]   -= abs(tx) > 1 ? tx * sensitivity->value * 0.25f : 0;
-			cl.viewangles[PITCH] += abs(ty) > 1 ? ty * sensitivity->value * 0.25f : 0;;
+			cl.viewangles[PITCH] += abs(ty) > 1 ? ty * sensitivity->value * 0.25f : 0;
 		}
 
 		old_touch = touch;

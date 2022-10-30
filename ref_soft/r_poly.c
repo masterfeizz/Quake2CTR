@@ -51,7 +51,7 @@ vec5_t	r_clip_verts[2][MAXWORKINGVERTS+2];
 
 static int		s_minindex, s_maxindex;
 
-static void R_DrawPoly( qboolean iswater );
+static void R_DrawPoly( int iswater );
 
 /*
 ** R_DrawSpanletOpaque
@@ -583,7 +583,8 @@ int R_ClipPolyFace (int nump, clipplane_t *pclipplane)
 /*
 ** R_PolygonDrawSpans
 */
-void R_PolygonDrawSpans(espan_t *pspan, qboolean iswater )
+// PGM - iswater was qboolean. changed to allow passing more flags
+void R_PolygonDrawSpans(espan_t *pspan, int iswater )
 {
 	int			count;
 	fixed16_t	snext, tnext;
@@ -592,8 +593,12 @@ void R_PolygonDrawSpans(espan_t *pspan, qboolean iswater )
 
 	s_spanletvars.pbase = cacheblock;
 
-	if ( iswater )
+//PGM
+	if ( iswater & SURF_WARP)
 		r_turb_turb = sintable + ((int)(r_newrefdef.time*SPEED)&(CYCLE-1));
+	else if (iswater & SURF_FLOWING)
+		r_turb_turb = blanktable;
+//PGM
 
 	sdivzspanletstepu = d_sdivzstepu * AFFINE_SPANLET_SIZE;
 	tdivzspanletstepu = d_tdivzstepu * AFFINE_SPANLET_SIZE;
@@ -607,6 +612,10 @@ void R_PolygonDrawSpans(espan_t *pspan, qboolean iswater )
 
 	do
 	{
+		if ( ( (pspan->u < 0) || (pspan->v < 0) ) // FS: Knightmare's out of bounds check.  Fixes xswamp.bsp in xatrix with res greater than 320x240.  Thanks!
+			|| (pspan->v >= (sizeof(d_scantable) / sizeof(int))) )
+			goto NextSpan;
+
 		s_spanletvars.pdest   = (byte *)d_viewbuffer + ( d_scantable[pspan->v] /*r_screenwidth * pspan->v*/) + pspan->u;
 		s_spanletvars.pz      = d_pzbuffer + (d_zwidth * pspan->v) + pspan->u;
 		s_spanletvars.u       = pspan->u;
@@ -756,6 +765,7 @@ void R_PolygonScanLeftEdge (void)
 	fixed16_t	u, u_step;
 
 	pspan = s_polygon_spans;
+
 	i = s_minindex;
 	if (i == 0)
 		i = r_polydesc.nump;
@@ -889,10 +899,11 @@ void R_PolygonScanRightEdge (void)
 /*
 ** R_ClipAndDrawPoly
 */
-void R_ClipAndDrawPoly( float alpha, qboolean isturbulent, qboolean textured )
+// PGM - isturbulent was qboolean. changed to int to allow passing more flags
+void R_ClipAndDrawPoly ( float alpha, int isturbulent, qboolean textured )
 {
 	emitpoint_t	outverts[MAXWORKINGVERTS+3], *pout;
-	float		*pv;
+	vec_t		*pv;
 	int			i, nump;
 	float		scale;
 	vec3_t		transformed, local;
@@ -915,7 +926,7 @@ void R_ClipAndDrawPoly( float alpha, qboolean isturbulent, qboolean textured )
 		}
 		else
 		{
-			if ( sw_stipplealpha->value )
+			if ( sw_stipplealpha->intValue)
 			{
 				if ( isturbulent )
 				{
@@ -988,7 +999,7 @@ void R_ClipAndDrawPoly( float alpha, qboolean isturbulent, qboolean textured )
 		scale = yscale * pout->zi;
 		pout->v = (ycenter - scale * transformed[1]);
 
-		pv += sizeof (vec5_t) / sizeof (pv);
+		pv += sizeof (vec5_t) / sizeof (*pv);
 	}
 
 // draw it
@@ -1005,7 +1016,7 @@ void R_BuildPolygonFromSurface(msurface_t *fa)
 {
 	int			i, lindex, lnumverts;
 	medge_t		*pedges, *r_pedge;
-	int			vertpage;
+//	int			vertpage; // FS: Unused
 	float		*vec;
 	vec5_t     *pverts;
 	float       tmins[2] = { 0, 0 };
@@ -1015,7 +1026,7 @@ void R_BuildPolygonFromSurface(msurface_t *fa)
 	// reconstruct the polygon
 	pedges = currentmodel->edges;
 	lnumverts = fa->numedges;
-	vertpage = 0;
+//	vertpage = 0;
 
 	pverts = r_clip_verts[0];
 
@@ -1047,12 +1058,14 @@ void R_BuildPolygonFromSurface(msurface_t *fa)
 		VectorSubtract( vec3_origin, r_polydesc.vpn, r_polydesc.vpn );
 	}
 
-	if ( fa->texinfo->flags & SURF_WARP )
+// PGM 09/16/98
+	if ( fa->texinfo->flags & (SURF_WARP|SURF_FLOWING) )
 	{
 		r_polydesc.pixels       = fa->texinfo->image->pixels[0];
 		r_polydesc.pixel_width  = fa->texinfo->image->width;
 		r_polydesc.pixel_height = fa->texinfo->image->height;
 	}
+// PGM 09/16/98
 	else
 	{
 		surfcache_t *scache;
@@ -1123,13 +1136,15 @@ void R_PolygonCalculateGradients (void)
 **
 ** This should NOT be called externally since it doesn't do clipping!
 */
-static void R_DrawPoly( qboolean iswater )
+// PGM - iswater was qboolean. changed to support passing more flags
+static void R_DrawPoly( int iswater )
 {
 	int			i, nump;
 	float		ymin, ymax;
 	emitpoint_t	*pverts;
 	espan_t	spans[MAXHEIGHT+1];
 
+	memset (&spans, 0, sizeof(spans));	// Knightmare- zero the spans array
 	s_polygon_spans = spans;
 
 // find the top and bottom vertices, and make sure there's at least one scan to
@@ -1194,10 +1209,24 @@ void R_DrawAlphaSurfaces( void )
 	{
 		R_BuildPolygonFromSurface( s );
 
+//=======
+//PGM
+//		if (s->texinfo->flags & SURF_TRANS66)
+//			R_ClipAndDrawPoly( 0.60f, ( s->texinfo->flags & SURF_WARP) != 0, true );
+//		else
+//			R_ClipAndDrawPoly( 0.30f, ( s->texinfo->flags & SURF_WARP) != 0, true );
+
+		// PGM - pass down all the texinfo flags, not just SURF_WARP.
 		if (s->texinfo->flags & SURF_TRANS66)
-			R_ClipAndDrawPoly( 0.60f, ( s->texinfo->flags & SURF_WARP) != 0, true );
+		{
+			R_ClipAndDrawPoly( 0.60f, (s->texinfo->flags & (SURF_WARP|SURF_FLOWING)), true );
+		}
 		else
-			R_ClipAndDrawPoly( 0.30f, ( s->texinfo->flags & SURF_WARP) != 0, true );
+		{
+			R_ClipAndDrawPoly( 0.30f, (s->texinfo->flags & (SURF_WARP|SURF_FLOWING)), true );
+		}
+//PGM
+//=======
 
 		s = s->nextalphasurface;
 	}

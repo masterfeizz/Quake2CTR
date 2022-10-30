@@ -40,24 +40,24 @@ INCLUDES	:=	.
 #---------------------------------------------------------------------------------
 ARCH	:=	-march=armv6k -mtune=mpcore -mfloat-abi=hard
 
-CFLAGS	:=	-g -Wall -O3 -mword-relocations -ffast-math \
+CFLAGS	:=	-g -Wall -O2 -mword-relocations -ffast-math \
 			-fomit-frame-pointer -ffunction-sections \
-			$(ARCH)
+			-fno-short-enums $(ARCH)
 
-CFLAGS	+=	$(INCLUDE) -DARM11 -D_3DS -DREF_HARD_LINKED -DGAME_HARD_LINKED
+CFLAGS	+=	$(INCLUDE) -DARM11 -D_3DS -DREF_HARD_LINKED -DGAME_HARD_LINKED -DOGG_SUPPORT -DVORBIS_USE_TREMOR
 
 CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++11
 
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=3dsx.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
-LIBS	:= -lctru -lm
+LIBS	:=  -lpicaGL -lctru -lm -lvorbisidec -logg
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing
 # include and lib
 #---------------------------------------------------------------------------------
-LIBDIRS	:= $(CTRULIB)
+LIBDIRS	:= $(CTRULIB) $(DEVKITPRO)/picaGL $(DEVKITPRO)/portlibs/3ds
 
 
 #---------------------------------------------------------------------------------
@@ -76,14 +76,15 @@ export VPATH	:=	$(foreach dir,$(SOURCES),$(CURDIR)/$(dir)) \
 export DEPSDIR	:=	$(CURDIR)/$(BUILD)
 
 SYSTEM = 	ctr/cd_ctr.o \
-			ctr/vid_ctr.o \
 			ctr/snddma_ctr.o \
 			ctr/sys_ctr.o \
 			ctr/in_ctr.o \
 			ctr/net_ctr.o \
-			ctr/swimp_ctr.o \
-			ctr/heap_ctr.o \
 			ctr/touch_ctr.o \
+			ctr/vid_ctr.o \
+			ctr/heap_ctr.o \
+			ctr/glimp_ctr.o \
+			ctr/qgl_ctr.o \
 			ctr/glob.o
 
 CLIENT =	client/cl_input.o \
@@ -103,10 +104,23 @@ CLIENT =	client/cl_input.o \
 			client/snd_dma.o \
 			client/snd_mem.o \
 			client/snd_mix.o \
+			client/snd_stream.o \
+			client/snd_wavstream.o \
 			client/qmenu.o \
-			client/cl_newfx.o 
+			client/cl_newfx.o
+
+REFGL = 	ref_gl/gl_draw.o \
+			ref_gl/gl_image.o \
+			ref_gl/gl_light.o \
+			ref_gl/gl_mesh.o \
+			ref_gl/gl_model.o \
+			ref_gl/gl_rmain.o \
+			ref_gl/gl_rmisc.o \
+			ref_gl/gl_rsurf.o \
+			ref_gl/gl_warp.o
 
 QCOMMON = 	qcommon/cmd.o \
+			qcommon/cmd_auto.o \
 			qcommon/cmodel.o \
 			qcommon/common.o \
 			qcommon/crc.o \
@@ -124,24 +138,6 @@ SERVER = 	server/sv_ccmds.o \
 			server/sv_send.o \
 			server/sv_user.o \
 			server/sv_world.o
-
-REFSOFT = 	ref_soft/r_alias.o \
-			ref_soft/r_main.o \
-			ref_soft/r_light.o \
-			ref_soft/r_misc.o \
-			ref_soft/r_model.o \
-			ref_soft/r_part.o \
-			ref_soft/r_poly.o \
-			ref_soft/r_polyse.o \
-			ref_soft/r_rast.o \
-			ref_soft/r_scan.o \
-			ref_soft/r_sprite.o \
-			ref_soft/r_surf.o \
-			ref_soft/r_aclip.o \
-			ref_soft/r_bsp.o \
-			ref_soft/r_draw.o \
-			ref_soft/r_edge.o \
-			ref_soft/r_image.o
 
 GAME = 		game/m_tank.o \
 			game/p_client.o \
@@ -193,7 +189,7 @@ GAME = 		game/m_tank.o \
 			game/m_supertank.o
 
 
-CFILES		:=	$(CLIENT) $(QCOMMON) $(SERVER) $(GAME) $(REFSOFT) $(SYSTEM)
+CFILES		:=	$(CLIENT) $(QCOMMON) $(SERVER) $(GAME) $(REFGL) $(SYSTEM)
 CPPFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
 SFILES		:=
 BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))
@@ -248,7 +244,7 @@ endif
 all: $(BUILD)
 
 $(BUILD):
-	mkdir -p build/client build/qcommon build/server build/ref_soft build/game build/ctr
+	mkdir -p build/client build/qcommon build/server build/ref_gl build/game build/ctr
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 
 #---------------------------------------------------------------------------------

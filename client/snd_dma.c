@@ -44,7 +44,7 @@ channel_t   channels[MAX_CHANNELS];
 qboolean	snd_initialized = false;
 int			sound_started=0;
 
-dma_t		dma;
+volatile dma_t		dma;
 
 vec3_t		listener_origin;
 vec3_t		listener_forward;
@@ -54,7 +54,7 @@ vec3_t		listener_up;
 qboolean	s_registering;
 
 int			soundtime;		// sample PAIRS
-int   		paintedtime; 	// sample PAIRS
+int			paintedtime;		// sample PAIRS
 
 // during registration it is possible to have more sounds
 // than could actually be referenced during gameplay,
@@ -78,10 +78,11 @@ cvar_t		*s_khz;
 cvar_t		*s_show;
 cvar_t		*s_mixahead;
 cvar_t		*s_primary;
-
+cvar_t		*s_musicvolume;
 
 int		s_rawend;
 portable_samplepair_t	s_rawsamples[MAX_RAW_SAMPLES];
+extern int	havegus; /* FS: Added */
 
 
 // ====================================================================
@@ -96,16 +97,15 @@ void S_SoundInfo_f(void)
 		Com_Printf ("sound system not started\n");
 		return;
 	}
-	
-    Com_Printf("%5d stereo\n", dma.channels - 1);
-    Com_Printf("%5d samples\n", dma.samples);
-    Com_Printf("%5d samplepos\n", dma.samplepos);
-    Com_Printf("%5d samplebits\n", dma.samplebits);
-    Com_Printf("%5d submission_chunk\n", dma.submission_chunk);
-    Com_Printf("%5d speed\n", dma.speed);
-    Com_Printf("0x%x dma buffer\n", dma.buffer);
-}
 
+	Com_Printf("%5d stereo\n", dma.channels - 1);
+	Com_Printf("%5d samples\n", dma.samples);
+	Com_Printf("%5d samplepos\n", dma.samplepos);
+	Com_Printf("%5d samplebits\n", dma.samplebits);
+	Com_Printf("%5d submission_chunk\n", dma.submission_chunk);
+	Com_Printf("%5d speed\n", dma.speed);
+	Com_Printf("%p dma buffer\n", dma.buffer);
+}
 
 
 /*
@@ -120,25 +120,39 @@ void S_Init (void)
 	Com_Printf("\n------- sound initialization -------\n");
 
 	cv = Cvar_Get ("s_initsound", "1", 0);
-	if (!cv->value)
+	if (!cv->intValue)
+	{
+		dma.buffer = NULL;/* just in case */
 		Com_Printf ("not initializing.\n");
+	}
 	else
 	{
 		s_volume = Cvar_Get ("s_volume", "0.7", CVAR_ARCHIVE);
-		s_khz = Cvar_Get ("s_khz", "22", CVAR_ARCHIVE);
+		s_khz = Cvar_Get ("s_khz", "11025", CVAR_ARCHIVE);
 		s_loadas8bit = Cvar_Get ("s_loadas8bit", "0", CVAR_ARCHIVE);
 		s_mixahead = Cvar_Get ("s_mixahead", "0.2", CVAR_ARCHIVE);
 		s_show = Cvar_Get ("s_show", "0", 0);
 		s_testsound = Cvar_Get ("s_testsound", "0", 0);
 		s_primary = Cvar_Get ("s_primary", "0", CVAR_ARCHIVE);	// win32 specific
+		s_musicvolume = Cvar_Get ("s_musicvolume", "1.0", CVAR_ARCHIVE); // Knightmare added
+		Cvar_SetDescription("s_musicvolume", "Volume for music played from WAV and OGG files.");
+
+		if (s_khz->value < 7000) /* FS: Old config, fix it up */
+			Cvar_SetValue("s_khz", 11025);
+
+		if (!SNDDMA_Init()) {
+			dma.buffer = NULL;/* just in case */
+			return;
+		}
 
 		Cmd_AddCommand("play", S_Play);
 		Cmd_AddCommand("stopsound", S_StopAllSounds);
 		Cmd_AddCommand("soundlist", S_SoundList);
 		Cmd_AddCommand("soundinfo", S_SoundInfo_f);
-
-		if (!SNDDMA_Init())
-			return;
+#ifdef OGG_SUPPORT
+		Cmd_AddCommand("ogg_restart", S_OGG_Restart); /* Knightmare added */
+#endif
+		Cmd_AddCommand("wav_restart", S_WAV_Restart); /* FS: Added */
 
 		S_InitScaletable ();
 
@@ -152,6 +166,13 @@ void S_Init (void)
 
 		S_StopAllSounds ();
 	}
+
+#ifdef OGG_SUPPORT
+	if(!COM_CheckParm("-noogg"))
+		S_OGG_Init(); /* Knightmare added */
+#endif
+	if(!COM_CheckParm("-nowavstream"))
+		S_WAV_Init(); /* FS: Added */
 
 	Com_Printf("------------------------------------\n");
 }
@@ -169,14 +190,25 @@ void S_Shutdown(void)
 	if (!sound_started)
 		return;
 
+#ifdef OGG_SUPPORT
+	S_OGG_Shutdown(); /* Knightmare added */
+#endif
+	S_WAV_Shutdown(); /* FS: Added */
+
 	SNDDMA_Shutdown();
 
+	dma.buffer = NULL;
 	sound_started = 0;
 
 	Cmd_RemoveCommand("play");
 	Cmd_RemoveCommand("stopsound");
 	Cmd_RemoveCommand("soundlist");
 	Cmd_RemoveCommand("soundinfo");
+#ifdef OGG_SUPPORT
+	Cmd_RemoveCommand("ogg_restart"); // Knightmare added
+#endif
+
+	Cmd_RemoveCommand("wav_restart");
 
 	// free all sounds
 	for (i=0, sfx=known_sfx ; i < num_sfx ; i++,sfx++)
@@ -234,13 +266,18 @@ sfx_t *S_FindName (char *name, qboolean create)
 	if (i == num_sfx)
 	{
 		if (num_sfx == MAX_SFX)
-			Com_Error (ERR_FATAL, "S_FindName: out of sfx_t");
+		{
+			Com_DPrintf(DEVELOPER_MSG_SOUND, "WARNING: MAX_SFX limit reached: %d\n", num_sfx); /* FS: FIXME: Silently fail out.  Got this during the big 80+ players match in city64.bsp */
+			return NULL;
+//			Com_Error (ERR_FATAL, "S_FindName: out of sfx_t");
+		}
 		num_sfx++;
 	}
 	
 	sfx = &known_sfx[i];
 	memset (sfx, 0, sizeof(*sfx));
-	strcpy (sfx->name, name);
+//	strncpy (sfx->name, name);
+	Q_strncpyz (sfx->name, name, sizeof(sfx->name));
 	sfx->registration_sequence = s_registration_sequence;
 	
 	return sfx;
@@ -260,7 +297,8 @@ sfx_t *S_AliasName (char *aliasname, char *truename)
 	int		i;
 
 	s = Z_Malloc (MAX_QPATH);
-	strcpy (s, truename);
+//	strncpy (s, truename);
+	Q_strncpyz (s, truename, MAX_QPATH);
 
 	// find a free sfx
 	for (i=0 ; i < num_sfx ; i++)
@@ -270,13 +308,18 @@ sfx_t *S_AliasName (char *aliasname, char *truename)
 	if (i == num_sfx)
 	{
 		if (num_sfx == MAX_SFX)
-			Com_Error (ERR_FATAL, "S_FindName: out of sfx_t");
+		{
+			Com_DPrintf(DEVELOPER_MSG_SOUND, "WARNING: MAX_SFX limit reached: %d\n", num_sfx); /* FS: FIXME: Silently fail out.  Got this during the big 80+ players match in city64.bsp */
+			return NULL;
+//			Com_Error (ERR_FATAL, "S_FindName: out of sfx_t");
+		}
 		num_sfx++;
 	}
 	
 	sfx = &known_sfx[i];
 	memset (sfx, 0, sizeof(*sfx));
-	strcpy (sfx->name, aliasname);
+//	strncpy (sfx->name, aliasname);
+	Q_strncpyz (sfx->name, aliasname, sizeof(sfx->name));
 	sfx->registration_sequence = s_registration_sequence;
 	sfx->truename = s;
 
@@ -310,6 +353,9 @@ sfx_t *S_RegisterSound (char *name)
 		return NULL;
 
 	sfx = S_FindName (name, true);
+	if (!sfx) /* FS: Don't bomb out if we reach the limit here, just silently fail */
+		return NULL;
+
 	sfx->registration_sequence = s_registration_sequence;
 
 	if (!s_registering)
@@ -350,7 +396,6 @@ void S_EndRegistration (void)
 				Com_PageInMemory ((byte *)sfx->cache, size);
 			}
 		}
-
 	}
 
 	// load everything in
@@ -362,6 +407,12 @@ void S_EndRegistration (void)
 	}
 
 	s_registering = false;
+
+	// Knightmare added
+	// S_EndRegistration is only called while the refresh is prepped
+	// during a sound resart, so we can use this to restart the music track
+	if (cls.state == ca_active && cl.refresh_prepped && !CDAudio_Active())
+		CL_PlayBackgroundTrack ();
 }
 
 
@@ -374,19 +425,19 @@ S_PickChannel
 */
 channel_t *S_PickChannel(int entnum, int entchannel)
 {
-    int			ch_idx;
-    int			first_to_die;
-    int			life_left;
+	int		ch_idx;
+	int		first_to_die;
+	int		life_left;
 	channel_t	*ch;
 
 	if (entchannel<0)
 		Com_Error (ERR_DROP, "S_PickChannel: entchannel<0");
 
 // Check for replacement sound, or find the best one to replace
-    first_to_die = -1;
-    life_left = 0x7fffffff;
-    for (ch_idx=0 ; ch_idx < MAX_CHANNELS ; ch_idx++)
-    {
+	first_to_die = -1;
+	life_left = 0x7fffffff;
+	for (ch_idx=0 ; ch_idx < MAX_CHANNELS ; ch_idx++)
+	{
 		if (entchannel != 0		// channel 0 never overrides
 		&& channels[ch_idx].entnum == entnum
 		&& channels[ch_idx].entchannel == entchannel)
@@ -404,7 +455,7 @@ channel_t *S_PickChannel(int entnum, int entchannel)
 			life_left = channels[ch_idx].end - paintedtime;
 			first_to_die = ch_idx;
 		}
-   }
+	}
 
 	if (first_to_die == -1)
 		return NULL;
@@ -412,8 +463,8 @@ channel_t *S_PickChannel(int entnum, int entchannel)
 	ch = &channels[first_to_die];
 	memset (ch, 0, sizeof(*ch));
 
-    return ch;
-}       
+	return ch;
+}
 
 /*
 =================
@@ -424,10 +475,10 @@ Used for spatializing channels and autosounds
 */
 void S_SpatializeOrigin (vec3_t origin, float master_vol, float dist_mult, int *left_vol, int *right_vol)
 {
-    vec_t		dot;
-    vec_t		dist;
-    vec_t		lscale, rscale, scale;
-    vec3_t		source_vec;
+	vec_t		dot;
+	vec_t		dist;
+	vec_t		lscale, rscale, scale;
+	vec3_t		source_vec;
 
 	if (cls.state != ca_active)
 	{
@@ -537,7 +588,6 @@ void S_FreePlaysound (playsound_t *ps)
 }
 
 
-
 /*
 ===============
 S_IssuePlaysound
@@ -552,7 +602,7 @@ void S_IssuePlaysound (playsound_t *ps)
 	channel_t	*ch;
 	sfxcache_t	*sc;
 
-	if (s_show->value)
+	if (s_show->intValue)
 		Com_Printf ("Issue %i\n", ps->begin);
 	// pick a channel to play on
 	ch = S_PickChannel(ps->entnum, ps->entchannel);
@@ -578,7 +628,7 @@ void S_IssuePlaysound (playsound_t *ps)
 
 	ch->pos = 0;
 	sc = S_LoadSound (ch->sfx);
-    ch->end = paintedtime + sc->length;
+	ch->end = paintedtime + sc->length;
 
 	// free the playsound
 	S_FreePlaysound (ps);
@@ -603,7 +653,8 @@ struct sfx_s *S_RegisterSexedSound (entity_state_t *ent, char *base)
 		if (p)
 		{
 			p += 1;
-			strcpy(model, p);
+		//	strncpy(model, p);
+			Q_strncpyz(model, p, sizeof(model));
 			p = strchr(model, '/');
 			if (p)
 				*p = 0;
@@ -611,7 +662,8 @@ struct sfx_s *S_RegisterSexedSound (entity_state_t *ent, char *base)
 	}
 	// if we can't figure it out, they're male
 	if (!model[0])
-		strcpy(model, "male");
+	//	strncpy(model, "male");
+		Q_strncpyz(model, "male", sizeof(model));
 
 	// see if we already know of the model specific sound
 	Com_sprintf (sexedFilename, sizeof(sexedFilename), "#players/%s/%s", model, base+1);
@@ -751,6 +803,13 @@ void S_StartLocalSound (char *sound)
 	S_StartSound (NULL, cl.playernum+1, 0, sfx, 1, 1, 0);
 }
 
+#ifdef GAMESPY
+void S_GamespySound (char *sound) /* FS: Play the complete.wav and abort.wav from gamespy3d if it's in sounds/gamespy */
+{
+	if (s_gamespy_sounds->intValue)
+		S_StartLocalSound(sound);
+}
+#endif
 
 /*
 ==================
@@ -760,7 +819,7 @@ S_ClearBuffer
 void S_ClearBuffer (void)
 {
 	int		clear;
-		
+
 	if (!sound_started)
 		return;
 
@@ -775,6 +834,10 @@ void S_ClearBuffer (void)
 	if (dma.buffer)
 		memset(dma.buffer, clear, dma.samples * dma.samplebits/8);
 	SNDDMA_Submit ();
+#ifdef __DJGPP__
+	if(havegus)
+		GUS_ClearDMA(); /* FS: Added */
+#endif
 }
 
 /*
@@ -805,6 +868,9 @@ void S_StopAllSounds(void)
 	// clear all the channels
 	memset(channels, 0, sizeof(channels));
 
+	// Stop background track
+	S_StopBackgroundTrack (); // Knightmare added
+
 	S_ClearBuffer ();
 }
 
@@ -826,9 +892,10 @@ void S_AddLoopSounds (void)
 	sfx_t		*sfx;
 	sfxcache_t	*sc;
 	int			num;
+	vec3_t		origin_v;	// Knightmare added
 	entity_state_t	*ent;
 
-	if (cl_paused->value)
+	if (cl_paused->intValue)
 		return;
 
 	if (cls.state != ca_active)
@@ -859,8 +926,32 @@ void S_AddLoopSounds (void)
 		num = (cl.frame.parse_entities + i)&(MAX_PARSE_ENTITIES-1);
 		ent = &cl_parse_entities[num];
 
+		// Knightmare- find correct origin for bmodels without origin brushes
+		if (ent->solid == 31) // special value for bmodels
+		{
+			cmodel_t	*cmodel;
+			qboolean	outofbounds = false;
+			int			k;
+
+			cmodel = cl.model_clip[ent->modelindex];
+			if (cmodel)
+			{
+				for (k=0; k<3; k++)
+					if (ent->origin[k] < cmodel->mins[k] || ent->origin[k] > cmodel->maxs[k])
+						outofbounds = true;
+			}
+			if (cmodel && outofbounds) {
+				for (k=0; k<3; k++)
+					origin_v[k] = ent->origin[k]+0.5*(cmodel->mins[k]+cmodel->maxs[k]);
+			}
+			else
+				VectorCopy (ent->origin, origin_v);
+		}
+		else
+			VectorCopy (ent->origin, origin_v);
+
 		// find the total contribution of all sounds of this type
-		S_SpatializeOrigin (ent->origin, 255.0, SOUND_LOOPATTENUATE,
+		S_SpatializeOrigin (origin_v, 255.0, SOUND_LOOPATTENUATE, // Knightmare changed, was ent->origin
 			&left_total, &right_total);
 		for (j=i+1 ; j<cl.frame.num_entities ; j++)
 		{
@@ -871,7 +962,7 @@ void S_AddLoopSounds (void)
 			num = (cl.frame.parse_entities + j)&(MAX_PARSE_ENTITIES-1);
 			ent = &cl_parse_entities[num];
 
-			S_SpatializeOrigin (ent->origin, 255.0, SOUND_LOOPATTENUATE, 
+			S_SpatializeOrigin (origin_v, 255.0, SOUND_LOOPATTENUATE,  // Knightmare changed, was ent->origin
 				&left, &right);
 			left_total += left;
 			right_total += right;
@@ -905,94 +996,88 @@ void S_AddLoopSounds (void)
 S_RawSamples
 
 Cinematic streaming and voice over network
+Streaming music support. Byte swapping
+of data must be handled by the codec.
+Expects data in signed 16 bit, or unsigned
+8 bit format.
 ============
 */
-void S_RawSamples (int samples, int rate, int width, int channels, byte *data)
+void S_RawSamples (int samples, int rate, int width, int channels, byte *data, qboolean music)
 {
-	int		i;
-	int		src, dst;
-	float	scale;
+	int i;
+	int src, dst;
+	float scale;
+	int intVolume;
 
 	if (!sound_started)
 		return;
 
 	if (s_rawend < paintedtime)
 		s_rawend = paintedtime;
-	scale = (float)rate / dma.speed;
 
-//Com_Printf ("%i < %i < %i\n", soundtime, paintedtime, s_rawend);
+	scale = (float) rate / dma.speed;
+	if (music)
+		intVolume = (int) (s_musicvolume->value * 256);
+	else	intVolume = (int) (s_volume->value * 256);
+
 	if (channels == 2 && width == 2)
 	{
-		if (scale == 1.0)
-		{	// optimized case
-			for (i=0 ; i<samples ; i++)
-			{
-				dst = s_rawend&(MAX_RAW_SAMPLES-1);
-				s_rawend++;
-				s_rawsamples[dst].left =
-				    LittleShort(((short *)data)[i*2]) << 8;
-				s_rawsamples[dst].right =
-				    LittleShort(((short *)data)[i*2+1]) << 8;
-			}
-		}
-		else
+		for (i = 0; ; i++)
 		{
-			for (i=0 ; ; i++)
-			{
-				src = i*scale;
-				if (src >= samples)
-					break;
-				dst = s_rawend&(MAX_RAW_SAMPLES-1);
-				s_rawend++;
-				s_rawsamples[dst].left =
-				    LittleShort(((short *)data)[src*2]) << 8;
-				s_rawsamples[dst].right =
-				    LittleShort(((short *)data)[src*2+1]) << 8;
-			}
+			src = i * scale;
+			if (src >= samples)
+				break;
+			dst = s_rawend & (MAX_RAW_SAMPLES - 1);
+			s_rawend++;
+			s_rawsamples [dst].left = ((short *) data)[src * 2] * intVolume;
+			s_rawsamples [dst].right = ((short *) data)[src * 2 + 1] * intVolume;
 		}
 	}
 	else if (channels == 1 && width == 2)
 	{
-		for (i=0 ; ; i++)
+		for (i = 0; ; i++)
 		{
-			src = i*scale;
+			src = i * scale;
 			if (src >= samples)
 				break;
-			dst = s_rawend&(MAX_RAW_SAMPLES-1);
+			dst = s_rawend & (MAX_RAW_SAMPLES - 1);
 			s_rawend++;
-			s_rawsamples[dst].left =
-			    LittleShort(((short *)data)[src]) << 8;
-			s_rawsamples[dst].right =
-			    LittleShort(((short *)data)[src]) << 8;
+			s_rawsamples [dst].left = ((short *) data)[src] * intVolume;
+			s_rawsamples [dst].right = ((short *) data)[src] * intVolume;
 		}
 	}
 	else if (channels == 2 && width == 1)
 	{
-		for (i=0 ; ; i++)
+		intVolume *= 256;
+
+		for (i = 0; ; i++)
 		{
-			src = i*scale;
+			src = i * scale;
 			if (src >= samples)
 				break;
-			dst = s_rawend&(MAX_RAW_SAMPLES-1);
+			dst = s_rawend & (MAX_RAW_SAMPLES - 1);
 			s_rawend++;
-			s_rawsamples[dst].left =
-			    ((char *)data)[src*2] << 16;
-			s_rawsamples[dst].right =
-			    ((char *)data)[src*2+1] << 16;
+		//	s_rawsamples [dst].left = ((signed char *) data)[src * 2] * intVolume;
+		//	s_rawsamples [dst].right = ((signed char *) data)[src * 2 + 1] * intVolume;
+			s_rawsamples [dst].left = (((byte *) data)[src * 2] - 128) * intVolume;
+			s_rawsamples [dst].right = (((byte *) data)[src * 2 + 1] - 128) * intVolume;
 		}
 	}
 	else if (channels == 1 && width == 1)
 	{
-		for (i=0 ; ; i++)
+		intVolume *= 256;
+
+		for (i = 0; ; i++)
 		{
-			src = i*scale;
+			src = i * scale;
 			if (src >= samples)
 				break;
-			dst = s_rawend&(MAX_RAW_SAMPLES-1);
+			dst = s_rawend & (MAX_RAW_SAMPLES - 1);
 			s_rawend++;
-			s_rawsamples[dst].left =
-			    (((byte *)data)[src]-128) << 16;
-			s_rawsamples[dst].right = (((byte *)data)[src]-128) << 16;
+		//	s_rawsamples [dst].left = ((signed char *) data)[src] * intVolume;
+		//	s_rawsamples [dst].right = ((signed char *) data)[src] * intVolume;
+			s_rawsamples [dst].left = (((byte *) data)[src] - 128) * intVolume;
+			s_rawsamples [dst].right = (((byte *) data)[src] - 128) * intVolume;
 		}
 	}
 }
@@ -1011,7 +1096,6 @@ void S_Update(vec3_t origin, vec3_t forward, vec3_t right, vec3_t up)
 	int			i;
 	int			total;
 	channel_t	*ch;
-	channel_t	*combine;
 
 	if (!sound_started)
 		return;
@@ -1033,8 +1117,6 @@ void S_Update(vec3_t origin, vec3_t forward, vec3_t right, vec3_t up)
 	VectorCopy(forward, listener_forward);
 	VectorCopy(right, listener_right);
 	VectorCopy(up, listener_up);
-
-	combine = NULL;
 
 	// update spatialization for dynamic sounds	
 	ch = channels;
@@ -1061,7 +1143,7 @@ void S_Update(vec3_t origin, vec3_t forward, vec3_t right, vec3_t up)
 	//
 	// debugging output
 	//
-	if (s_show->value)
+	if (s_show->intValue)
 	{
 		total = 0;
 		ch = channels;
@@ -1075,7 +1157,13 @@ void S_Update(vec3_t origin, vec3_t forward, vec3_t right, vec3_t up)
 		Com_Printf ("----(%i)---- painted: %i\n", total, paintedtime);
 	}
 
-// mix some sound
+#ifdef OGG_SUPPORT
+	S_UpdateBackgroundTrack ();	//  Knightmare added
+#endif
+
+	S_UpdateWavTrack(); /* FS: Added */
+
+	// mix some sound
 	S_Update_();
 }
 
@@ -1128,7 +1216,7 @@ void S_Update_(void)
 // check to make sure that we haven't overshot
 	if (paintedtime < soundtime)
 	{
-		Com_DPrintf ("S_Update_ : overflow\n");
+		Com_DPrintf(DEVELOPER_MSG_SOUND, "S_Update_ : overflow\n");
 		paintedtime = soundtime;
 	}
 
@@ -1161,17 +1249,20 @@ void S_Play(void)
 	int 	i;
 	char name[256];
 	sfx_t	*sfx;
-	
+
 	i = 1;
 	while (i<Cmd_Argc())
 	{
 		if (!strrchr(Cmd_Argv(i), '.'))
 		{
-			strcpy(name, Cmd_Argv(i));
-			strcat(name, ".wav");
+		//	strncpy(name, Cmd_Argv(i));
+		//	strncat(name, ".wav");
+			Q_strncpyz(name, Cmd_Argv(i), sizeof(name));
+			Q_strncatz(name, ".wav", sizeof(name));
 		}
 		else
-			strcpy(name, Cmd_Argv(i));
+		//	strncpy(name, Cmd_Argv(i));
+			Q_strncpyz(name, Cmd_Argv(i), sizeof(name));
 		sfx = S_RegisterSound(name);
 		S_StartSound(NULL, cl.playernum+1, 0, sfx, 1.0, 1.0, 0);
 		i++;
@@ -1212,3 +1303,11 @@ void S_SoundList(void)
 	Com_Printf ("Total resident: %i\n", total);
 }
 
+/* FS: So we can suport both */
+void S_StopBackgroundTrack(void)
+{
+	S_StopWAVBackgroundTrack();
+#ifdef OGG_SUPPORT
+	S_StopOGGBackgroundTrack();
+#endif
+}

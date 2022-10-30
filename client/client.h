@@ -27,6 +27,14 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <stdio.h>
 #include <stdlib.h>
 
+#ifdef __DJGPP__ /* djgpp-2.04 and newer. */
+#include <stdint.h>
+#elif defined(_MSC_VER)
+#include "msinttypes/stdint.h"
+#else
+#include <stdint.h>
+#endif
+
 #include "ref.h"
 
 #include "vid.h"
@@ -37,7 +45,26 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "console.h"
 #include "cdaudio.h"
 
+#ifdef USE_CURL /* HTTP downloading from R1Q2 */
+#ifdef _WIN32
+#define CURL_STATICLIB
+#define CURL_HIDDEN_SYMBOLS
+#define CURL_EXTERN_SYMBOL
+#define CURL_CALLING_CONVENTION __cdecl
+#endif
+
+#define CURL_STATICLIB
+#include "../libcurl/include/curl/curl.h"
+#define CURL_ERROR(x)	curl_easy_strerror(x)
+
+#define MAX_HTTP_HANDLES 4 /* FS: If I want to be nasty and change the value */
+#endif /* end HTTP downloading from R1Q2 */
+
 //=============================================================================
+
+extern	cvar_t	*cl_3dcam;
+extern	cvar_t	*cl_3dcam_angle;
+extern	cvar_t	*cl_3dcam_dist;
 
 typedef struct
 {
@@ -83,6 +110,45 @@ extern int num_cl_weaponmodels;
 
 #define	CMD_BACKUP		64	// allow a lot of command backups for very fast systems
 
+#ifdef USE_CURL	// HTTP downloading from R1Q2
+
+void CL_CancelHTTPDownloads (qboolean permKill);
+void CL_InitHTTPDownloads (void);
+qboolean CL_QueueHTTPDownload (const char *quakePath);
+void CL_RunHTTPDownloads (void);
+qboolean CL_PendingHTTPDownloads (void);
+void CL_SetHTTPServer (const char *URL);
+void CL_HTTP_Cleanup (qboolean fullShutdown);
+void CL_HTTP_ResetMapAbort (void);	/* Knightmare added */
+
+typedef enum
+{
+	DLQ_STATE_NOT_STARTED,
+	DLQ_STATE_RUNNING,
+	DLQ_STATE_DONE
+} dlq_state;
+
+typedef struct dlqueue_s
+{
+	struct dlqueue_s	*next;
+	char				quakePath[MAX_QPATH];
+	dlq_state			state;
+} dlqueue_t;
+
+typedef struct dlhandle_s
+{
+	CURL		*curl;
+	char		filePath[MAX_OSPATH];
+	FILE		*file;
+	dlqueue_t	*queueEntry;
+	size_t		fileSize;
+	size_t		position;
+	double		speed;
+	char		URL[576];
+	char		*tempBuffer;
+} dlhandle_t;
+#endif	/* USE_CURL */
+
 //
 // the client_state_t structure is wiped completely at every
 // server map change
@@ -125,6 +191,7 @@ typedef struct
 
 	int			time;			// this is the time value that the client
 								// is rendering at.  always <= cls.realtime
+	int			initial_server_frame; /* R1Q2: initial_server_frame is for fixing precision loss with high serverframes */
 	float		lerpfrac;		// between oldframe and frame
 
 	refdef_t	refdef;
@@ -143,7 +210,7 @@ typedef struct
 	FILE		*cinematic_file;
 	int			cinematictime;		// cls.realtime for first cinematic frame
 	int			cinematicframe;
-	char		cinematicpalette[768];
+	unsigned char	cinematicpalette[768];
 	qboolean	cinematicpalette_active;
 
 	//
@@ -153,6 +220,7 @@ typedef struct
 	int			servercount;	// server identification for prespawns
 	char		gamedir[MAX_QPATH];
 	int			playernum;
+	int			maxclients; /* FS: From R1Q2 */
 
 	char		configstrings[MAX_CONFIGSTRINGS][MAX_QPATH];
 
@@ -204,8 +272,13 @@ typedef struct
 	keydest_t	key_dest;
 
 	int			framecount;
-	int			realtime;			// always increasing, no clamping, etc
-	float		frametime;			// seconds since last frame
+	int	spamTime; /* FS: From R1Q2 */
+	int	lastSpamTime; /* FS: From R1Q2 */
+	int	realtime;			// always increasing, no clamping, etc
+	float			frametime;			// seconds since last frame
+	float			netFrameTime;		// seconds since last packet frame
+	float			renderFrameTime;	// seconds since last refresh frame
+	qboolean	forcePacket;		// forces a packet to be sent the next frame
 
 // screen rendering information
 	float		disable_screen;		// showing loading plaque between levels
@@ -215,7 +288,7 @@ typedef struct
 									// > cls.disable_servercount, clear disable_screen
 
 // connection information
-	char		servername[MAX_OSPATH];	// name of server from original connect
+	char		servername[256];	// name of server from original connect
 	float		connect_time;		// for connection retransmits
 
 	int			quakePort;			// a 16 bit value that allows quake servers
@@ -230,12 +303,37 @@ typedef struct
 	char		downloadname[MAX_OSPATH];
 	int			downloadnumber;
 	dltype_t	downloadtype;
+	size_t		downloadposition;	// added for HTTP downloads
 	int			downloadpercent;
+	float		downloadrate;		/* Knightmare- to display KB/s */
+
+#ifdef GAMESPY /* FS: For gamespy */
+	int			gamespypercent;
+	int			gamespyupdate;
+	int			gamespytotalservers;
+	int			gamespystarttime;
+#endif
 
 // demo recording info must be here, so it isn't cleared on level change
 	qboolean	demorecording;
 	qboolean	demowaiting;	// don't record until a non-delta message is received
 	FILE		*demofile;
+
+#ifdef USE_CURL /* HTTP downloading from R1Q2 */
+	dlqueue_t		downloadQueue;			//queue of paths we need
+	dlhandle_t		HTTPHandles[MAX_HTTP_HANDLES];			//actual download handles
+	//don't raise this!
+	//i use a hardcoded maximum of 4 simultaneous connections to avoid
+	//overloading the server. i'm all too familiar with assholes who set
+	//their IE or Firefox max connections to 16 and rape my Apache processes
+	//every time they load a page... i'd rather not have my q2 client also
+	//have the ability to do so - especially since we're possibly downloading
+	//large files.
+
+	char			downloadServer[512];	//base url prefix to download from
+	char			downloadServerRetry[512]; /* FS: Added because Whale's Weapons HTTP server rejects you after a lot of 404s.  Then you lose HTTP until a hard reconnect. */
+	char			downloadReferer[32];	//libcurl requires a static string :(
+#endif /* USE_CURL */
 } client_static_t;
 
 extern client_static_t	cls;
@@ -256,7 +354,13 @@ extern	cvar_t	*cl_add_entities;
 extern	cvar_t	*cl_predict;
 extern	cvar_t	*cl_footsteps;
 extern	cvar_t	*cl_noskins;
-extern	cvar_t	*cl_autoskins;
+
+/* Knightmare- whether to try to play OGGs instead of CD tracks */
+extern	cvar_t	*cl_ogg_music;
+extern	cvar_t	*cl_rogue_music; // whether to play Rogue tracks
+extern	cvar_t	*cl_xatrix_music; // whether to play Xatrix tracks
+
+extern	cvar_t	*cl_wav_music;
 
 extern	cvar_t	*cl_upspeed;
 extern	cvar_t	*cl_forwardspeed;
@@ -289,7 +393,25 @@ extern	cvar_t	*cl_lightlevel;	// FIXME HACK
 extern	cvar_t	*cl_paused;
 extern	cvar_t	*cl_timedemo;
 
+#ifdef CLIENT_SPLIT_NETFRAME
+extern	cvar_t	*cl_async;
+#endif
+
 extern	cvar_t	*cl_vwep;
+
+extern	cvar_t	*cl_autorepeat_allkeys; /* FS: Added */
+/* FS: Gamespy stuff */
+extern	cvar_t	*s_gamespy_sounds;
+
+#ifdef USE_CURL	/* HTTP downloading from R1Q2 */
+extern	cvar_t	*cl_http_downloads;
+extern	cvar_t	*cl_http_filelists;
+extern	cvar_t	*cl_http_proxy;
+extern	cvar_t	*cl_http_max_connections;
+#endif	/* USE_CURL */
+
+extern	cvar_t	*cl_stufftext_check; /* FS: Added */
+extern	cvar_t	*fov_adapt; /* sezero */
 
 typedef struct
 {
@@ -378,7 +500,9 @@ typedef struct particle_s
 
 void CL_ClearEffects (void);
 void CL_ClearTEnts (void);
-void CL_BlasterTrail (vec3_t start, vec3_t end);
+void CL_BlasterParticles (vec3_t org, vec3_t dir, unsigned int color);
+//void CL_BlasterTrail (vec3_t start, vec3_t end);
+void CL_BlasterTrail (vec3_t start, vec3_t end, float color);
 void CL_QuadTrail (vec3_t start, vec3_t end);
 void CL_RailTrail (vec3_t start, vec3_t end);
 void CL_BubbleTrail (vec3_t start, vec3_t end);
@@ -389,8 +513,8 @@ void CL_IonripperTrail (vec3_t start, vec3_t end);
 
 // ========
 // PGM
-void CL_BlasterParticles2 (vec3_t org, vec3_t dir, unsigned int color);
-void CL_BlasterTrail2 (vec3_t start, vec3_t end);
+//void CL_BlasterParticles2 (vec3_t org, vec3_t dir, unsigned int color);
+//void CL_BlasterTrail2 (vec3_t start, vec3_t end);
 void CL_DebugTrail (vec3_t start, vec3_t end);
 void CL_SmokeTrail (vec3_t start, vec3_t end, int colorStart, int colorRun, int spacing);
 void CL_Flashlight (int ent, vec3_t pos);
@@ -420,6 +544,7 @@ void CL_ParseFrame (void);
 
 void CL_ParseTEnt (void);
 void CL_ParseConfigString (void);
+void CL_PlayBackgroundTrack (void); /* Knightmare added */
 void CL_ParseMuzzleFlash (void);
 void CL_ParseMuzzleFlash2 (void);
 void SmokeAndFlash(vec3_t origin);
@@ -452,6 +577,7 @@ void CL_ParseLayout (void);
 //
 extern	refexport_t	re;		// interface to refresh .dll
 
+float ClampCvar (float min, float max, float value);
 void CL_Init (void);
 
 void CL_FixUpGender(void);
@@ -461,6 +587,7 @@ void CL_GetChallengePacket (void);
 void CL_PingServers_f (void);
 void CL_Snd_Restart_f (void);
 void CL_RequestNextDownload (void);
+void CL_WriteConfig_f (void);	/* Knightmare- added writeconfig command */
 
 //
 // cl_input
@@ -474,11 +601,18 @@ typedef struct
 } kbutton_t;
 
 extern	kbutton_t	in_mlook, in_klook;
-extern 	kbutton_t 	in_strafe;
-extern 	kbutton_t 	in_speed;
+extern	kbutton_t	in_strafe;
+extern	kbutton_t	in_speed;
 
 void CL_InitInput (void);
 void CL_SendCmd (void);
+
+#ifdef CLIENT_SPLIT_NETFRAME
+void CL_SendCmd_Async (void);
+void CL_RefreshCmd (void);
+void CL_RefreshMove (void);
+#endif
+
 void CL_SendMove (usercmd_t *cmd);
 
 void CL_ClearState (void);
@@ -511,6 +645,8 @@ void CL_LoadClientinfo (clientinfo_t *ci, char *s);
 void SHOWNET(char *s);
 void CL_ParseClientinfo (int player);
 void CL_Download_f (void);
+void CL_Download_Reset_KBps_counter (void); /* FS: Added KB/s download counter */
+void CL_Download_Calculate_KBps (int byteDistance, int totalSize); /* FS: Added KB/s download counter */
 
 //
 // cl_view.c
@@ -557,6 +693,30 @@ void CL_TrapParticles (entity_t *ent);
 //
 // menus
 //
+
+#ifdef GAMESPY
+#define MAX_SERVERS 300 /* FS: There's barely 200 active servers existing, but OK. */
+#define SHOW_POPULATED_SERVERS 1
+#define SHOW_ALL_SERVERS 2
+
+/* FS: Gamespy browser */
+typedef struct
+{
+	char ip[16];
+	int port;
+	int ping;
+	char hostname[32];
+	int curPlayers;
+	int maxPlayers;
+	char mapname[32];
+	int menuNumber;
+}
+gamespyBrowser_t;
+extern gamespyBrowser_t browserList[MAX_SERVERS];
+extern gamespyBrowser_t browserListAll[MAX_SERVERS];
+void CL_PingNetServers_f (void);
+#endif
+
 void M_Init (void);
 void M_Keydown (int key);
 void M_Draw (void);
@@ -576,8 +736,7 @@ void CL_DrawInventory (void);
 //
 void CL_PredictMovement (void);
 
-#if id386
-#error
+#if (id386) && defined(_MSC_VER)
 void x86_TimerStart( void );
 void x86_TimerStop( void );
 void x86_TimerInit( unsigned long smallest, unsigned longest );

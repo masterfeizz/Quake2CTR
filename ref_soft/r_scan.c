@@ -49,8 +49,8 @@ void D_WarpScreen (void)
 	byte	**row;
 
 	static int	cached_width, cached_height;
-	static byte	*rowptr[1200+AMP2*2];
-	static int	column[1600+AMP2*2];
+	static byte	*rowptr[MAXHEIGHT+AMP2*2]; /* FS: Changed from 1200 */
+	static int	column[MAXWIDTH+AMP2*2]; /* FS: Changed from 1600 */
 
 	//
 	// these are constant over resolutions, and can be saved
@@ -561,7 +561,7 @@ void D_DrawZSpans (espan_t *pspan)
 	// we count on FP exceptions being turned off to avoid range problems
 		izi = (int)(zi * 0x8000 * 0x10000);
 
-		if ((long)pdest & 0x02)
+		if ((intptr_t)pdest & 0x02)
 		{
 			*pdest++ = (short)(izi >> 16);
 			izi += izistep;

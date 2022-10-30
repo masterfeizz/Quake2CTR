@@ -134,8 +134,6 @@ void CL_ClipMoveToEntities ( vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end,
 			else
 				*tr = trace;
 		}
-		else if (trace.startsolid)
-			tr->startsolid = true;
 	}
 }
 
@@ -206,14 +204,17 @@ void CL_PredictMovement (void)
 	int			i;
 	int			step;
 	int			oldz;
+#ifdef CLIENT_SPLIT_NETFRAME
+	static int	last_step_frame = 0;
+#endif
 
 	if (cls.state != ca_active)
 		return;
 
-	if (cl_paused->value)
+	if (cl_paused->intValue)
 		return;
 
-	if (!cl_predict->value || (cl.frame.playerstate.pmove.pm_flags & PMF_NO_PREDICTION))
+	if (!cl_predict->intValue || (cl.frame.playerstate.pmove.pm_flags & PMF_NO_PREDICTION))
 	{	// just set angles
 		for (i=0 ; i<3 ; i++)
 		{
@@ -228,7 +229,7 @@ void CL_PredictMovement (void)
 	// if we are too far out of date, just freeze
 	if (current - ack >= CMD_BACKUP)
 	{
-		if (cl_showmiss->value)
+		if (cl_showmiss->intValue)
 			Com_Printf ("exceeded CMD_BACKUP\n");
 		return;	
 	}
@@ -245,28 +246,64 @@ void CL_PredictMovement (void)
 //	SCR_DebugGraph (current - ack - 1, 0);
 
 	frame = 0;
-
-	// run frames
-	while (++ack < current)
+#ifdef CLIENT_SPLIT_NETFRAME
+	if (cl_async->intValue)
 	{
-		frame = ack & (CMD_BACKUP-1);
-		cmd = &cl.cmds[frame];
+		// run frames
+		while (++ack <= current) // Changed '<' to '<=' cause current is our pending cmd
+		{
+			frame = ack & (CMD_BACKUP-1);
+			cmd = &cl.cmds[frame];
 
-		pm.cmd = *cmd;
-		Pmove (&pm);
+			if (!cmd->msec) // Ignore 'null' usercmd entries
+				continue;
 
-		// save for debug checking
-		VectorCopy (pm.s.origin, cl.predicted_origins[frame]);
+			pm.cmd = *cmd;
+			Pmove (&pm);
+
+			// save for debug checking
+			VectorCopy (pm.s.origin, cl.predicted_origins[frame]);
+		}
+
+		oldframe = (ack-2) & (CMD_BACKUP-1);
+		oldz = cl.predicted_origins[oldframe][2];
+		step = pm.s.origin[2] - oldz;
+
+		// TODO: Add Paril's step down fix here
+		if (last_step_frame != current && step > 63 && step < 160 && (pm.s.pm_flags & PMF_ON_GROUND) )
+		{
+			cl.predicted_step = step * 0.125;
+			cl.predicted_step_time = cls.realtime - cls.netFrameTime * 500;
+			last_step_frame = current;
+		}
 	}
-
-	oldframe = (ack-2) & (CMD_BACKUP-1);
-	oldz = cl.predicted_origins[oldframe][2];
-	step = pm.s.origin[2] - oldz;
-	if (step > 63 && step < 160 && (pm.s.pm_flags & PMF_ON_GROUND) )
+	else
 	{
-		cl.predicted_step = step * 0.125;
-		cl.predicted_step_time = cls.realtime - cls.frametime * 500;
+#endif // CLIENT_SPLIT_NETFRAME
+		// run frames
+		while (++ack < current)
+		{
+			frame = ack & (CMD_BACKUP-1);
+			cmd = &cl.cmds[frame];
+
+			pm.cmd = *cmd;
+			Pmove (&pm);
+
+			// save for debug checking
+			VectorCopy (pm.s.origin, cl.predicted_origins[frame]);
+		}
+
+		oldframe = (ack-2) & (CMD_BACKUP-1);
+		oldz = cl.predicted_origins[oldframe][2];
+		step = pm.s.origin[2] - oldz;
+		if (step > 63 && step < 160 && (pm.s.pm_flags & PMF_ON_GROUND) )
+		{
+			cl.predicted_step = step * 0.125;
+			cl.predicted_step_time = cls.realtime - cls.netFrameTime * 500;
+		}
+#ifdef CLIENT_SPLIT_NETFRAME
 	}
+#endif // CLIENT_SPLIT_NETFRAME
 
 
 	// copy results out for rendering

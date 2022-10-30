@@ -35,9 +35,10 @@ cvar_t		*cl_testparticles;
 cvar_t		*cl_testentities;
 cvar_t		*cl_testlights;
 cvar_t		*cl_testblend;
+cvar_t		*r_contentblend; /* FS: Fucking hate palette blends from gun fire, etc. */
 
 cvar_t		*cl_stats;
-
+extern	cvar_t	*skin; /* FS: From KMQ2 */
 
 int			r_numdlights;
 dlight_t	r_dlights[MAX_DLIGHTS];
@@ -76,6 +77,15 @@ V_AddEntity
 */
 void V_AddEntity (entity_t *ent)
 {
+	if (ent->flags&RF_VIEWERMODEL) //here is our client
+	{
+		int i;
+		for (i=0;i<3;i++)
+			ent->oldorigin[i] = ent->origin[i] = cl.predicted_origin[i];
+		if (cl_3dcam->intValue)
+			ent->flags&=~RF_VIEWERMODEL;
+	}
+
 	if (r_numentities >= MAX_ENTITIES)
 		return;
 	r_entities[r_numentities++] = *ent;
@@ -260,7 +270,8 @@ void CL_PrepRefresh (void)
 	SCR_AddDirtyPoint (viddef.width-1, viddef.height-1);
 
 	// let the render dll load the map
-	strcpy (mapname, cl.configstrings[CS_MODELS+1] + 5);	// skip "maps/"
+//	strncpy (mapname, cl.configstrings[CS_MODELS+1] + 5);	// skip "maps/"
+	Q_strncpyz (mapname, cl.configstrings[CS_MODELS+1] + 5, sizeof(mapname));	// skip "maps/"
 	mapname[strlen(mapname)-4] = 0;		// cut off ".bsp"
 
 	// register models, pics, and skins
@@ -278,7 +289,8 @@ void CL_PrepRefresh (void)
 	CL_RegisterTEntModels ();
 
 	num_cl_weaponmodels = 1;
-	strcpy(cl_weaponmodels[0], "weapon.md2");
+//	strncpy(cl_weaponmodels[0], "weapon.md2");
+	Q_strncpyz(cl_weaponmodels[0], "weapon.md2", sizeof(cl_weaponmodels[0]));
 
 	for (i=1 ; i<MAX_MODELS && cl.configstrings[CS_MODELS+i][0] ; i++)
 	{
@@ -310,7 +322,7 @@ void CL_PrepRefresh (void)
 			Com_Printf ("                                     \r");
 	}
 
-	Com_Printf ("images\r", i); 
+	Com_Printf ("images\r"); 
 	SCR_UpdateScreen ();
 	for (i=1 ; i<MAX_IMAGES && cl.configstrings[CS_IMAGES+i][0] ; i++)
 	{
@@ -330,10 +342,12 @@ void CL_PrepRefresh (void)
 		Com_Printf ("                                     \r");
 	}
 
-	CL_LoadClientinfo (&cl.baseclientinfo, "unnamed\\male/grunt");
+	// Knightmare - Vics fix to get rid of male/grunt flicker
+	// CL_LoadClientinfo (&cl.baseclientinfo, "unnamed\\male/grunt");
+	CL_LoadClientinfo (&cl.baseclientinfo, va("unnamed\\%s", skin->string));
 
 	// set sky textures and speed
-	Com_Printf ("sky\r", i); 
+	Com_Printf ("sky\r"); 
 	SCR_UpdateScreen ();
 	rotate = atof (cl.configstrings[CS_SKYROTATE]);
 	sscanf (cl.configstrings[CS_SKYAXIS], "%f %f %f", 
@@ -352,7 +366,15 @@ void CL_PrepRefresh (void)
 	cl.force_refdef = true;	// make sure we have a valid refdef
 
 	// start the cd track
-	CDAudio_Play (atoi(cl.configstrings[CS_CDTRACK]), true);
+//	CDAudio_Play (atoi(cl.configstrings[CS_CDTRACK]), true);
+	CL_PlayBackgroundTrack ();
+
+	// Knightmare- close loading screen as soon as done
+	cls.disable_screen = false;
+
+	// Knightmare- don't start map with game paused
+	if (cls.key_dest != key_menu)
+		Cvar_Set ("paused", "0");
 }
 
 /*
@@ -417,7 +439,7 @@ SCR_DrawCrosshair
 */
 void SCR_DrawCrosshair (void)
 {
-	if (!crosshair->value)
+	if (!crosshair->intValue)
 		return;
 
 	if (crosshair->modified)
@@ -449,7 +471,7 @@ void V_RenderView( float stereo_separation )
 	if (!cl.refresh_prepped)
 		return;			// still loading
 
-	if (cl_timedemo->value)
+	if (cl_timedemo->intValue)
 	{
 		if (!cl.timedemo_start)
 			cl.timedemo_start = Sys_Milliseconds ();
@@ -458,7 +480,7 @@ void V_RenderView( float stereo_separation )
 
 	// an invalid frame will just use the exact previous refdef
 	// we can't use the old frame if the video mode has changed, though...
-	if ( cl.frame.valid && (cl.force_refdef || !cl_paused->value) )
+	if ( cl.frame.valid && (cl.force_refdef || !cl_paused->intValue) )
 	{
 		cl.force_refdef = false;
 
@@ -469,18 +491,26 @@ void V_RenderView( float stereo_separation )
 		// v_forward, etc.
 		CL_AddEntities ();
 
-		if (cl_testparticles->value)
+		if (cl_testparticles->intValue)
 			V_TestParticles ();
-		if (cl_testentities->value)
+		if (cl_testentities->intValue)
 			V_TestEntities ();
-		if (cl_testlights->value)
+		if (cl_testlights->intValue)
 			V_TestLights ();
-		if (cl_testblend->value)
+		if (cl_testblend->intValue)
 		{
 			cl.refdef.blend[0] = 1;
 			cl.refdef.blend[1] = 0.5;
 			cl.refdef.blend[2] = 0.25;
 			cl.refdef.blend[3] = 0.5;
+		}
+
+		if (!r_contentblend->intValue) /* FS: Fucking hate palette blends from gun fire, etc. */
+		{
+			cl.refdef.blend[0] = 0;
+			cl.refdef.blend[1] = 0;
+			cl.refdef.blend[2] = 0;
+			cl.refdef.blend[3] = 0;
 		}
 
 		// offset vieworg appropriately if we're doing stereo separation
@@ -508,13 +538,13 @@ void V_RenderView( float stereo_separation )
 
 		cl.refdef.areabits = cl.frame.areabits;
 
-		if (!cl_add_entities->value)
+		if (!cl_add_entities->intValue)
 			r_numentities = 0;
-		if (!cl_add_particles->value)
+		if (!cl_add_particles->intValue)
 			r_numparticles = 0;
-		if (!cl_add_lights->value)
+		if (!cl_add_lights->intValue)
 			r_numdlights = 0;
-		if (!cl_add_blend->value)
+		if (!cl_add_blend->intValue)
 		{
 			VectorClear (cl.refdef.blend);
 		}
@@ -528,15 +558,20 @@ void V_RenderView( float stereo_separation )
 		cl.refdef.lightstyles = r_lightstyles;
 
 		cl.refdef.rdflags = cl.frame.playerstate.rdflags;
+		if (fov_adapt->intValue)
+#ifdef __MSDOS__
+		    if ((cl.refdef.height / cl.refdef.width) * (320.0f / 240.0f) <= 1.10f)
+#endif
+			cl.refdef.rdflags |= RDF_FOVADAPT;
 
 		// sort entities for better cache locality
         qsort( cl.refdef.entities, cl.refdef.num_entities, sizeof( cl.refdef.entities[0] ), (int (*)(const void *, const void *))entitycmpfnc );
 	}
 
 	re.RenderFrame (&cl.refdef);
-	if (cl_stats->value)
+	if (cl_stats->intValue)
 		Com_Printf ("ent:%i  lt:%i  part:%i\n", r_numentities, r_numdlights, r_numparticles);
-	if ( log_stats->value && ( log_stats_file != 0 ) )
+	if ( log_stats->intValue && ( log_stats_file != 0 ) )
 		fprintf( log_stats_file, "%i,%i,%i,",r_numentities, r_numdlights, r_numparticles);
 
 
@@ -579,6 +614,6 @@ void V_Init (void)
 	cl_testparticles = Cvar_Get ("cl_testparticles", "0", 0);
 	cl_testentities = Cvar_Get ("cl_testentities", "0", 0);
 	cl_testlights = Cvar_Get ("cl_testlights", "0", 0);
-
+	r_contentblend = Cvar_Get ("r_contentblend", "1", CVAR_ARCHIVE); /* FS: Fucking hate palette blends from gun fire, etc. */
 	cl_stats = Cvar_Get ("cl_stats", "0", 0);
 }

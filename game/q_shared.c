@@ -17,15 +17,17 @@ along with this program; if not, write to the Free Software
 Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 */
+
+#include <ctype.h> /* tolower */
 #include "q_shared.h"
 
-#define DEG2RAD( a ) ( a * M_PI ) / 180.0F
+//#define DEG2RAD( a ) ( a * M_PI ) / 180.0F
 
 vec3_t vec3_origin = {0,0,0};
 
 //============================================================================
 
-#ifdef _WIN32
+#ifdef _MSC_VER
 #pragma optimize( "", off )
 #endif
 
@@ -84,10 +86,9 @@ void RotatePointAroundVector( vec3_t dst, const vec3_t dir, const vec3_t point, 
 	}
 }
 
-#ifdef _WIN32
+#ifdef _MSC_VER
 #pragma optimize( "", on )
 #endif
-
 
 
 void AngleVectors (vec3_t angles, vec3_t forward, vec3_t right, vec3_t up)
@@ -182,7 +183,6 @@ void PerpendicularVector( vec3_t dst, const vec3_t src )
 }
 
 
-
 /*
 ================
 R_ConcatRotations
@@ -250,20 +250,14 @@ void R_ConcatTransforms (float in1[3][4], float in2[3][4], float out[3][4])
 
 float Q_fabs (float f)
 {
-#if 0
-	if (f >= 0)
-		return f;
-	return -f;
-#else
-	int tmp = * ( int * ) &f;
+	int tmp = *(int *) &f;
 	tmp &= 0x7FFFFFFF;
-	return * ( float * ) &tmp;
-#endif
+	return *(float *) &tmp;
 }
 
-#if defined _M_IX86 && !defined C_ONLY
+#if defined(_MSC_VER) && defined(_M_IX86) && !defined(C_ONLY)
 #pragma warning (disable:4035)
-__declspec( naked ) long Q_ftol( float f )
+__declspec( naked ) int Q_ftol( float f )
 {
 	static int tmp;
 	__asm fld dword ptr [esp+4]
@@ -302,12 +296,9 @@ float	anglemod(float a)
 	return a;
 }
 
-	int		i;
-	vec3_t	corners[2];
-
 
 // this is the slow, general version
-int BoxOnPlaneSide2 (vec3_t emins, vec3_t emaxs, struct cplane_s *p)
+int BoxOnPlaneSide (vec3_t emins, vec3_t emaxs, struct cplane_s *p)
 {
 	int		i;
 	float	dist1, dist2;
@@ -340,13 +331,25 @@ int BoxOnPlaneSide2 (vec3_t emins, vec3_t emaxs, struct cplane_s *p)
 
 /*
 ==================
+BOPS_Error
+
+Split out like this for ASM to call.
+==================
+*/
+void BOPS_Error (void)
+{
+	Sys_Error ("BoxOnPlaneSide:  Bad signbits");
+}
+
+/*
+==================
 BoxOnPlaneSide
 
 Returns 1, 2, or 1 + 2
 ==================
 */
-#if !id386 || defined __linux__ 
-int BoxOnPlaneSide (vec3_t emins, vec3_t emaxs, struct cplane_s *p)
+#if !id386
+int BoxOnPlaneSide2 (vec3_t emins, vec3_t emaxs, struct cplane_s *p)
 {
 	float	dist1, dist2;
 	int		sides;
@@ -397,8 +400,8 @@ dist1 = p->normal[0]*emins[0] + p->normal[1]*emins[1] + p->normal[2]*emins[2];
 dist2 = p->normal[0]*emaxs[0] + p->normal[1]*emaxs[1] + p->normal[2]*emaxs[2];
 		break;
 	default:
+		BOPS_Error ();
 		dist1 = dist2 = 0;		// shut up compiler
-		assert( 0 );
 		break;
 	}
 
@@ -408,11 +411,14 @@ dist2 = p->normal[0]*emaxs[0] + p->normal[1]*emaxs[1] + p->normal[2]*emaxs[2];
 	if (dist2 < p->dist)
 		sides |= 2;
 
-	assert( sides != 0 );
+	if (sides == 0)
+		Sys_Error ("BoxOnPlaneSide: sides==0");
 
 	return sides;
 }
-#else
+#endif
+
+#if (id386) && defined(_MSC_VER)
 #pragma warning( disable: 4035 )
 
 __declspec( naked ) int BoxOnPlaneSide (vec3_t emins, vec3_t emaxs, struct cplane_s *p)
@@ -673,10 +679,9 @@ int VectorCompare (vec3_t v1, vec3_t v2)
 {
 	if (v1[0] != v2[0] || v1[1] != v2[1] || v1[2] != v2[2])
 			return 0;
-			
+
 	return 1;
 }
-
 
 vec_t VectorNormalize (vec3_t v)
 {
@@ -692,9 +697,8 @@ vec_t VectorNormalize (vec3_t v)
 		v[1] *= ilength;
 		v[2] *= ilength;
 	}
-		
-	return length;
 
+	return length;
 }
 
 vec_t VectorNormalize2 (vec3_t v, vec3_t out)
@@ -711,9 +715,8 @@ vec_t VectorNormalize2 (vec3_t v, vec3_t out)
 		out[1] = v[1]*ilength;
 		out[2] = v[2]*ilength;
 	}
-		
-	return length;
 
+	return length;
 }
 
 void VectorMA (vec3_t veca, float scale, vec3_t vecb, vec3_t vecc)
@@ -722,7 +725,6 @@ void VectorMA (vec3_t veca, float scale, vec3_t vecb, vec3_t vecc)
 	vecc[1] = veca[1] + scale*vecb[1];
 	vecc[2] = veca[2] + scale*vecb[2];
 }
-
 
 vec_t _DotProduct (vec3_t v1, vec3_t v2)
 {
@@ -763,7 +765,7 @@ vec_t VectorLength(vec3_t v)
 {
 	int		i;
 	float	length;
-	
+
 	length = 0;
 	for (i=0 ; i< 3 ; i++)
 		length += v[i]*v[i];
@@ -796,7 +798,6 @@ int Q_log2(int val)
 }
 
 
-
 //====================================================================================
 
 /*
@@ -807,7 +808,7 @@ COM_SkipPath
 char *COM_SkipPath (char *pathname)
 {
 	char	*last;
-	
+
 	last = pathname;
 	while (*pathname)
 	{
@@ -859,15 +860,18 @@ COM_FileBase
 void COM_FileBase (char *in, char *out)
 {
 	char *s, *s2;
-	
+
+	if (!*in) {
+		*out = 0;
+		return;
+	}
 	s = in + strlen(in) - 1;
-	
+
 	while (s != in && *s != '.')
 		s--;
-	
 	for (s2 = s ; s2 != in && *s2 != '/' ; s2--)
-	;
-	
+	 ;
+
 	if (s-s2 < 2)
 		out[0] = 0;
 	else
@@ -888,9 +892,13 @@ Returns the path up to, but not including the last /
 void COM_FilePath (char *in, char *out)
 {
 	char *s;
-	
+
+	if (!*in) {
+		*out = 0;
+		return;
+	}
 	s = in + strlen(in) - 1;
-	
+
 	while (s != in && *s != '/')
 		s--;
 
@@ -911,6 +919,7 @@ void COM_DefaultExtension (char *path, char *extension)
 // if path doesn't have a .EXT, append extension
 // (extension should include the .)
 //
+	if (!*path) return;
 	src = path + strlen(path) - 1;
 
 	while (*src != '/' && src != path)
@@ -937,19 +946,19 @@ qboolean	bigendien;
 // mess up when qcommon is included in multiple places
 short	(*_BigShort) (short l);
 short	(*_LittleShort) (short l);
-int		(*_BigLong) (int l);
-int		(*_LittleLong) (int l);
+int	(*_BigLong) (int l);
+int	(*_LittleLong) (int l);
 float	(*_BigFloat) (float l);
 float	(*_LittleFloat) (float l);
 
 short	BigShort(short l){return _BigShort(l);}
 short	LittleShort(short l) {return _LittleShort(l);}
-int		BigLong (int l) {return _BigLong(l);}
-int		LittleLong (int l) {return _LittleLong(l);}
+int	BigLong (int l) {return _BigLong(l);}
+int	LittleLong (int l) {return _LittleLong(l);}
 float	BigFloat (float l) {return _BigFloat(l);}
 float	LittleFloat (float l) {return _LittleFloat(l);}
 
-short   ShortSwap (short l)
+short ShortSwap (short l)
 {
 	byte    b1,b2;
 
@@ -959,12 +968,12 @@ short   ShortSwap (short l)
 	return (b1<<8) + b2;
 }
 
-short	ShortNoSwap (short l)
+short ShortNoSwap (short l)
 {
 	return l;
 }
 
-int    LongSwap (int l)
+int LongSwap (int l)
 {
 	byte    b1,b2,b3,b4;
 
@@ -976,7 +985,7 @@ int    LongSwap (int l)
 	return ((int)b1<<24) + ((int)b2<<16) + ((int)b3<<8) + b4;
 }
 
-int	LongNoSwap (int l)
+int LongNoSwap (int l)
 {
 	return l;
 }
@@ -988,8 +997,7 @@ float FloatSwap (float f)
 		float	f;
 		byte	b[4];
 	} dat1, dat2;
-	
-	
+
 	dat1.f = f;
 	dat2.b[0] = dat1.b[3];
 	dat2.b[1] = dat1.b[2];
@@ -1033,9 +1041,7 @@ void Swap_Init (void)
 		_BigFloat = FloatNoSwap;
 		_LittleFloat = FloatSwap;
 	}
-
 }
-
 
 
 /*
@@ -1051,12 +1057,13 @@ char	*va(char *format, ...)
 {
 	va_list		argptr;
 	static char		string[1024];
-	
-	va_start (argptr, format);
-	vsprintf (string, format,argptr);
-	va_end (argptr);
 
-	return string;	
+	va_start (argptr, format);
+	Q_vsnprintf (string, sizeof(string), format, argptr);
+	va_end (argptr);
+	string[sizeof(string)-1] = 0;
+
+	return string;
 }
 
 
@@ -1078,13 +1085,13 @@ char *COM_Parse (char **data_p)
 	data = *data_p;
 	len = 0;
 	com_token[0] = 0;
-	
+
 	if (!data)
 	{
 		*data_p = NULL;
 		return "";
 	}
-		
+
 // skip whitespace
 skipwhite:
 	while ( (c = *data) <= ' ')
@@ -1096,7 +1103,7 @@ skipwhite:
 		}
 		data++;
 	}
-	
+
 // skip // comments
 	if (c=='/' && data[1] == '/')
 	{
@@ -1167,7 +1174,6 @@ void Com_PageInMemory (byte *buffer, int size)
 }
 
 
-
 /*
 ============================================================================
 
@@ -1179,18 +1185,19 @@ void Com_PageInMemory (byte *buffer, int size)
 // FIXME: replace all Q_stricmp with Q_strcasecmp
 int Q_stricmp (char *s1, char *s2)
 {
-#if defined(WIN32)
+#if defined(_WIN32)
 	return _stricmp (s1, s2);
+#elif defined(__DJGPP__)
+	return stricmp (s1, s2);
 #else
 	return strcasecmp (s1, s2);
 #endif
 }
 
-
 int Q_strncasecmp (char *s1, char *s2, int n)
 {
 	int		c1, c2;
-	
+
 	do
 	{
 		c1 = *s1++;
@@ -1198,7 +1205,7 @@ int Q_strncasecmp (char *s1, char *s2, int n)
 
 		if (!n--)
 			return 0;		// strings are equal until end point
-		
+
 		if (c1 != c2)
 		{
 			if (c1 >= 'a' && c1 <= 'z')
@@ -1209,7 +1216,7 @@ int Q_strncasecmp (char *s1, char *s2, int n)
 				return -1;		// strings not equal
 		}
 	} while (c1);
-	
+
 	return 0;		// strings are equal
 }
 
@@ -1219,19 +1226,93 @@ int Q_strcasecmp (char *s1, char *s2)
 }
 
 
-
 void Com_sprintf (char *dest, int size, char *fmt, ...)
 {
 	int		len;
 	va_list		argptr;
-	char	bigbuffer[0x10000];
 
 	va_start (argptr,fmt);
-	len = vsprintf (bigbuffer,fmt,argptr);
+	len = Q_vsnprintf (dest, size, fmt, argptr);
 	va_end (argptr);
-	if (len >= size)
+	if (size > 0) dest[size - 1] = 0;
+	if (len < 0 || len >= size) {
 		Com_Printf ("Com_sprintf: overflow of %i in %i\n", len, size);
-	strncpy (dest, bigbuffer, size-1);
+	}
+}
+
+// Knightmare added
+void Com_strcpy (char *dest, int destSize, const char *src)
+{
+	if (!dest) {
+		Com_Printf ("Com_strcpy: NULL dst\n");
+		return;
+	}
+	if (!src) {
+		Com_Printf ("Com_strcpy: NULL src\n");
+		return;
+	}
+	if (destSize < 1) {
+		Com_Printf ("Com_strcpy: dstSize < 1\n");
+		return;
+	}
+
+	strncpy(dest, src, destSize-1);
+	dest[destSize-1] = 0;
+}
+
+// Knightmare added
+void Com_strcat (char *dest, int destSize, const char *src)
+{
+	if (!dest) {
+		Com_Printf ("Com_strcat: NULL dst\n");
+		return;
+	}
+	if (!src) {
+		Com_Printf ("Com_strcat: NULL src\n");
+		return;
+	}
+	if (destSize < 1) {
+		Com_Printf ("Com_strcat: dstSize < 1\n");
+		return;
+	}
+
+	while (--destSize && *dest)
+		dest++;
+
+	if (destSize > 0) {
+		while (--destSize && *src)
+			*dest++ = *src++;
+
+		*dest = 0;
+	}
+}
+
+// Knightmare added
+/*
+=============
+Com_HashFileName
+=============
+*/
+long Com_HashFileName (const char *fname, int hashSize, qboolean sized)
+{
+	int		i = 0;
+	long	hash = 0;
+	char	letter;
+
+	if (fname[0] == '/' || fname[0] == '\\') i++;	// skip leading slash
+	while (fname[i] != '\0')
+	{
+		letter = tolower(fname[i]);
+	//	if (letter == '.') break;
+		if (letter == '\\') letter = '/';	// fix filepaths
+		hash += (long)(letter)*(i+119);
+		i++;
+	}
+	hash = (hash ^ (hash >> 10) ^ (hash >> 20));
+	if (sized) {
+		hash &= (hashSize-1);
+	}
+	return hash;
 }
 
 /*
@@ -1257,7 +1338,7 @@ char *Info_ValueForKey (char *s, char *key)
 								// work without stomping on each other
 	static	int	valueindex;
 	char	*o;
-	
+
 	valueindex ^= 1;
 	if (*s == '\\')
 		s++;
@@ -1299,7 +1380,7 @@ void Info_RemoveKey (char *s, char *key)
 	char	value[512];
 	char	*o;
 
-	if (strstr (key, "\\"))
+	if (strchr(key, '\\'))
 	{
 //		Com_Printf ("Can't use a key with a \\\n");
 		return;
@@ -1331,14 +1412,13 @@ void Info_RemoveKey (char *s, char *key)
 
 		if (!strcmp (key, pkey) )
 		{
-			strcpy (start, s);	// remove this part
+			memmove(start, s, strlen(s) + 1);	// remove this part
 			return;
 		}
 
 		if (!*s)
 			return;
 	}
-
 }
 
 
@@ -1352,9 +1432,9 @@ can mess up the server's parsing
 */
 qboolean Info_Validate (char *s)
 {
-	if (strstr (s, "\""))
+	if (strchr(s, '\"'))
 		return false;
-	if (strstr (s, ";"))
+	if (strchr(s, ';'))
 		return false;
 	return true;
 }
@@ -1365,25 +1445,25 @@ void Info_SetValueForKey (char *s, char *key, char *value)
 	int		c;
 	int		maxsize = MAX_INFO_STRING;
 
-	if (strstr (key, "\\") || strstr (value, "\\") )
+	if ((key && strchr(key, '\\')) || (value && strchr(value, '\\')))
 	{
 		Com_Printf ("Can't use keys or values with a \\\n");
 		return;
 	}
 
-	if (strstr (key, ";") )
+	if (key && strchr(key, ';'))
 	{
 		Com_Printf ("Can't use keys or values with a semicolon\n");
 		return;
 	}
 
-	if (strstr (key, "\"") || strstr (value, "\"") )
+	if ((key && strchr(key, '\"')) || (value && strchr(value, '\"')))
 	{
 		Com_Printf ("Can't use keys or values with a \"\n");
 		return;
 	}
 
-	if (strlen(key) > MAX_INFO_KEY-1 || strlen(value) > MAX_INFO_KEY-1)
+	if ((key && (strlen(key) > MAX_INFO_KEY-1)) || (value && (strlen(value) > MAX_INFO_KEY-1)))
 	{
 		Com_Printf ("Keys and values must be < 64 characters.\n");
 		return;
@@ -1394,7 +1474,7 @@ void Info_SetValueForKey (char *s, char *key, char *value)
 
 	Com_sprintf (newi, sizeof(newi), "\\%s\\%s", key, value);
 
-	if (strlen(newi) + strlen(s) > maxsize)
+	if (strlen(newi) + strlen(s) >= maxsize)
 	{
 		Com_Printf ("Info string length exceeded\n");
 		return;
@@ -1415,4 +1495,139 @@ void Info_SetValueForKey (char *s, char *key, char *value)
 
 //====================================================================
 
+/* FS: From KMQ2 */
+/*
+=================
+Q_strncpyz
 
+Safe strncpy that ensures a trailing zero
+=================
+*/
+void Q_strncpyz (char *dst, const char *src, int dstSize)
+{
+	if (!dst) {
+	//	Com_Error (ERR_FATAL, "Q_strncpyz: NULL dst");
+	//	Com_Printf ("Q_strncpyz: NULL dst\n");
+		return;
+	}
+	if (!src) {
+	//	Com_Error (ERR_FATAL, "Q_strncpyz: NULL src");
+	//	Com_Printf ("Q_strncpyz: NULL src\n");
+		return;
+	}
+	if (dstSize < 1) {
+	//	Com_Error (ERR_FATAL, "Q_strncpyz: dstSize < 1");
+	//	Com_Printf ("Q_strncpyz: dstSize < 1\n");
+		return;
+	}
+
+	strncpy(dst, src, dstSize-1);
+	dst[dstSize-1] = 0;
+}
+
+/*
+=================
+Q_strncatz
+
+Safe strncat that ensures a trailing zero
+=================
+*/
+void Q_strncatz (char *dst, const char *src, int dstSize)
+{
+	if (!dst) {
+	//	Com_Error (ERR_FATAL, "Q_strncatz: NULL dst");
+	//	Com_Printf ("Q_strncatz: NULL dst\n");
+		return;
+	}
+	if (!src) {
+	//	Com_Error (ERR_FATAL, "Q_strncatz: NULL src");
+	//	Com_Printf ("Q_strncatz: NULL src\n");
+		return;
+	}
+	if (dstSize < 1) {
+	//	Com_Error (ERR_FATAL, "Q_strncatz: dstSize < 1");
+	//	Com_Printf ("Q_strncatz: dstSize < 1\n");
+		return;
+	}
+
+	while (--dstSize && *dst)
+		dst++;
+
+	if (dstSize > 0){
+		while (--dstSize && *src)
+			*dst++ = *src++;
+
+		*dst = 0;
+	}
+}
+
+char *Q_strlwr (char *string)
+{
+	char	*s = string;
+
+	while (*s) {
+		*s = tolower(*s);
+		s++;
+	}
+	return string;
+}
+
+char *Q_strupr (char *string)
+{
+	char	*s = string;
+
+	while (*s) {
+		*s = toupper(*s);
+		s++;
+	}
+	return string;
+}
+
+#if defined(__DJGPP__) || defined(_WIN32)
+char * /* from OpenBSD */
+strtok_r(char *s, const char *delim, char **last)
+{
+	const char *spanp;
+	int c, sc;
+	char *tok;
+
+	if (s == NULL && (s = *last) == NULL)
+		return (NULL);
+
+	/*
+	 * Skip (span) leading delimiters (s += strspn(s, delim), sort of).
+	 */
+cont:
+	c = *s++;
+	for (spanp = delim; (sc = *spanp++) != 0;) {
+		if (c == sc)
+			goto cont;
+	}
+
+	if (c == 0) {		/* no non-delimiter characters */
+		*last = NULL;
+		return (NULL);
+	}
+	tok = s - 1;
+
+	/*
+	 * Scan token (scan for delimiters: s += strcspn(s, delim), sort of).
+	 * Note that delim must have one NUL; we stop if we see that, too.
+	 */
+	for (;;) {
+		c = *s++;
+		spanp = delim;
+		do {
+			if ((sc = *spanp++) == c) {
+				if (c == 0)
+					s = NULL;
+				else
+					s[-1] = '\0';
+				*last = s;
+				return (tok);
+			}
+		} while (sc != 0);
+	}
+	/* NOTREACHED */
+}
+#endif

@@ -17,13 +17,15 @@ along with this program; if not, write to the Free Software
 Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 */
+#ifndef __REF_H
+#define __REF_H
 
 #include "../qcommon/qcommon.h"
 
-#define	MAX_DLIGHTS		32
+#define	MAX_DLIGHTS		128 /* FS: Was 32 */
 #define	MAX_ENTITIES	128
 #define	MAX_PARTICLES	4096
-#define	MAX_LIGHTSTYLES	256
+#define	MAX_LIGHTSTYLES	 256
 
 #define POWERSUIT_SCALE		4.0F
 
@@ -133,8 +135,8 @@ typedef struct
 	// if api_version is different, the dll cannot be used
 	int		api_version;
 
-	// called when the library is loaded
-	qboolean	(*Init) ( void *hinstance, void *wndproc );
+	// called when the library is loaded (0 : OK, -1 : fail)
+	int	(*Init) (void *hinstance, void *wndproc);
 
 	// called before the library is unloaded
 	void	(*Shutdown) (void);
@@ -188,7 +190,7 @@ typedef struct
 //
 typedef struct
 {
-	void	(*Sys_Error) (int err_level, char *str, ...);
+	void	(*Sys_Error) (int err_level, char *str, ...) __fp_attribute__((__noreturn__, __format__(__printf__,2,3)));
 
 	void	(*Cmd_AddCommand) (char *name, void(*cmd)(void));
 	void	(*Cmd_RemoveCommand) (char *name);
@@ -196,7 +198,7 @@ typedef struct
 	char	*(*Cmd_Argv) (int i);
 	void	(*Cmd_ExecuteText) (int exec_when, char *text);
 
-	void	(*Con_Printf) (int print_level, char *str, ...);
+	void	(*Con_Printf) (int print_level, char *str, ...) __fp_attribute__((__format__(__printf__,2,3)));
 
 	// files will be memory mapped read only
 	// the returned buffer may be part of a larger pak file,
@@ -213,6 +215,7 @@ typedef struct
 	cvar_t	*(*Cvar_Get) (char *name, char *value, int flags);
 	cvar_t	*(*Cvar_Set)( char *name, char *value );
 	void	 (*Cvar_SetValue)( char *name, float value );
+	void	(*Cvar_SetDescription) (char *name, const char *description); /* FS */
 
 	qboolean	(*Vid_GetModeInfo)( int *width, int *height, int mode );
 	void		(*Vid_MenuInit)( void );
@@ -222,3 +225,6 @@ typedef struct
 
 // this is the only function actually exported at the linker level
 typedef	refexport_t	(*GetRefAPI_t) (refimport_t);
+
+#endif // __REF_H
+

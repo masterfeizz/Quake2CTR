@@ -25,6 +25,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 image_t		r_images[MAX_RIMAGES];
 int			numr_images;
 
+#define USE_TGA // FS: Seems to load TGAs OK for skyboxes, but who knows...
 
 /*
 ===============
@@ -218,7 +219,7 @@ void LoadTGA (char *name, byte **pic, int *width, int *height)
 	// load the file
 	//
 	length = ri.FS_LoadFile (name, (void **)&buffer);
-	if (!buffer)
+	if (!buffer || length <= 0)
 	{
 		ri.Con_Printf (PRINT_DEVELOPER, "Bad tga file %s\n", name);
 		return;
@@ -300,7 +301,11 @@ void LoadTGA (char *name, byte **pic, int *width, int *height)
 		}
 	}
 	else if (targa_header.image_type==10) {   // Runlength encoded RGB images
-		unsigned char red,green,blue,alphabyte,packetHeader,packetSize,j;
+		unsigned char red = 0; // FS: Compiler warning
+		unsigned char green = 0; // FS: Compiler warning
+		unsigned char blue = 0; // FS: Compiler warning
+		unsigned char alphabyte = 0; // FS: Compiler warning
+		unsigned char packetHeader,packetSize,j;
 		for(row=rows-1; row>=0; row--) {
 			pixbuf = targa_rgba + row*columns*4;
 			for(column=0; column<columns; ) {
@@ -405,36 +410,151 @@ image_t *R_FindFreeImage (void)
 	return image;
 }
 
+void R_BuildPalettedTexture( unsigned char *paletted_texture, unsigned char *scaled, int scaled_width, int scaled_height )
+{
+	int i;
+
+	for ( i = 0; i < scaled_width * scaled_height; i++ )
+	{
+		unsigned int r, g, b, c;
+
+		r = ( scaled[0] >> 3 ) & 31;
+		g = ( scaled[1] >> 2 ) & 63;
+		b = ( scaled[2] >> 3 ) & 31;
+
+		c = r | ( g << 5 ) | ( b << 11 );
+
+		paletted_texture[i] = sw_state.d_16to8table[c];
+
+		scaled += 4;
+	}
+}
+
 /*
 ================
 GL_LoadPic
 
 ================
 */
-image_t *GL_LoadPic (char *name, byte *pic, int width, int height, imagetype_t type)
+image_t *GL_LoadPic (char *name, byte *pic, int width, int height, imagetype_t type, int bits)
 {
 	image_t		*image;
 	int			i, c, b;
+	unsigned char paletted_texture[256*256];
+	int j,z,y;
+
+#ifdef GL_UPLOAD8 // FS: For weapons mod and its fucked up blood splats, but doesn't work
+	int p, s;
+	unsigned	trans[512*256];
+#endif
+
+	if (type == it_sky && (width > 256 || height > 256))
+	{
+		ri.Con_Printf (PRINT_ALL, "Draw_LoadPic: \"%s\" has dimensions of %ix%i.  Limit is 256x256.\n", name, width, height);
+		return NULL;
+	}
 
 	image = R_FindFreeImage ();
+
 	if (strlen(name) >= sizeof(image->name))
+	{
 		ri.Sys_Error (ERR_DROP, "Draw_LoadPic: \"%s\" is too long", name);
+	}
+
 	strcpy (image->name, name);
 	image->registration_sequence = registration_sequence;
 
-	image->width = width;
-	image->height = height;
-	image->type = type;
-
-	c = width*height;
-	image->pixels[0] = malloc (c);
-	image->transparent = false;
-	for (i=0 ; i<c ; i++)
+	if (type == it_wall || type == it_sky)
 	{
-		b = pic[i];
-		if (b == 255)
-			image->transparent = true;
-		image->pixels[0][i] = b;
+		image->width = LittleLong (width);
+		image->height = LittleLong (height);
+		image->type = it_wall;
+
+		c = image->width*image->height * (256+64+16+4)/256;
+		image->pixels[0] = malloc (c);
+		image->pixels[1] = image->pixels[0] + image->width*image->height;
+		image->pixels[2] = image->pixels[1] + image->width*image->height/4;
+		image->pixels[3] = image->pixels[2] + image->width*image->height/16;
+
+		if (bits == 32)
+		{
+			ri.Con_Printf(PRINT_DEVELOPER, "Attempting to build a paletted texture\n");
+			R_BuildPalettedTexture(paletted_texture, ( unsigned char * ) pic,
+			image->width, image->height );
+			pic = paletted_texture;
+		}
+
+		// Load the texture pixels from pic
+		// Temporary mipmaping code
+		image->transparent = false;
+
+#ifdef GL_UPLOAD8
+		// FS: From GL_Upload8, but I don't think it's working
+		s = width*height;
+
+		if (bits == 8)
+		{
+			for (i=0 ; i<s ; i++)
+			{
+				p = pic[i];
+				trans[i] = d_8to24table[p];
+	
+				if (p == 255)
+				{	// transparent, so scan around for another color
+					// to avoid alpha fringes
+					// FIXME: do a full flood fill so mips work...
+					ri.Con_Printf(PRINT_ALL, "GL_LoadPic: Found transparency in %s\n", name);
+					if (i > width && pic[i-width] != 255)
+						p = pic[i-width];
+					else if (i < s-width && pic[i+width] != 255)
+						p = pic[i+width];
+					else if (i > 0 && pic[i-1] != 255)
+						p = pic[i-1];
+					else if (i < s-1 && pic[i+1] != 255)
+						p = pic[i+1];
+					else
+						p = 0;
+
+					// copy rgb components
+					((byte *)&trans[i])[0] = ((byte *)&d_8to24table[p])[0];
+					((byte *)&trans[i])[1] = ((byte *)&d_8to24table[p])[1];
+					((byte *)&trans[i])[2] = ((byte *)&d_8to24table[p])[2];
+				}
+			}
+		}
+#endif
+		for (z=1,y=0 ; y<=3 ; z*=2,y++)
+		{
+			for (j=0; j<image -> height/z ; j++)
+			{
+				for (i=0 ; i < image->width/z ; i++)
+				{
+					b = pic[((j*z)*image->width)+(i*z)];
+					image->pixels[y][(j*(image->width/z))+(i)] = b;
+				}
+			}
+		}
+	} 
+	else
+	{
+		image->width = width;
+		image->height = height;
+		image->type = type;
+
+		c = width*height;
+		image->pixels[0] = malloc (c);
+		image->transparent = false;
+
+		for (i=0 ; i<c ; i++)
+		{
+			b = pic[i];
+
+			if (b == 255)
+			{
+				image->transparent = true;
+			}
+			image->pixels[0][i] = b;
+		}
 	}
 
 	return image;
@@ -516,26 +636,69 @@ image_t	*R_FindImage (char *name, imagetype_t type)
 	//
 	pic = NULL;
 	palette = NULL;
-	if (!strcmp(name+len-4, ".pcx"))
+
+	if (!strcmp(name+len-4, ".tga"))
+	{
+#ifdef USE_TGA
+		ri.Con_Printf(PRINT_DEVELOPER,"Attempting to load a TGA: %s!\n", name);
+
+		LoadTGA (name, &pic, &width, &height);
+
+		if (!pic)
+		{
+			if (type == it_wall)
+			{
+				return r_notexture_mip;
+			}
+			else
+			{
+				return NULL;
+			}
+		}
+
+
+		image = GL_LoadPic (name, pic, width, height, type, 32);
+#else
+		return NULL;	// ri.Sys_Error (ERR_DROP, "R_FindImage: can't load %s in software renderer", name);
+#endif
+	}
+	else if (!strcmp(name+len-4, ".pcx"))
 	{
 		LoadPCX (name, &pic, &palette, &width, &height);
+
 		if (!pic)
-			return NULL;	// ri.Sys_Error (ERR_DROP, "R_FindImage: can't load %s", name);
-		image = GL_LoadPic (name, pic, width, height, type);
+		{
+			if (type == it_wall)
+			{
+				return r_notexture_mip;
+			}
+			else
+			{
+				return NULL;
+			}
+		}
+
+//		image = GL_LoadPic (name, pic, width, height, type);
+		image = GL_LoadPic (name, pic, width, height, type, 8); //Added 8 bit spec
 	}
 	else if (!strcmp(name+len-4, ".wal"))
 	{
 		image = R_LoadWal (name);
 	}
-	else if (!strcmp(name+len-4, ".tga"))
-		return NULL;	// ri.Sys_Error (ERR_DROP, "R_FindImage: can't load %s in software renderer", name);
 	else
+	{
 		return NULL;	// ri.Sys_Error (ERR_DROP, "R_FindImage: bad extension on: %s", name);
+	}
 
 	if (pic)
+	{
 		free(pic);
+	}
+
 	if (palette)
+	{
 		free(palette);
+	}
 
 	return image;
 }
@@ -593,6 +756,14 @@ R_InitImages
 void	R_InitImages (void)
 {
 	registration_sequence = 1;
+
+	// www.quakewiki.net/quakesrc/39.html
+	ri.FS_LoadFile( "pics/16to8.dat", (void **)&sw_state.d_16to8table );
+
+	if ( !sw_state.d_16to8table )
+	{
+		ri.Sys_Error( ERR_FATAL, "Couldn't load pics/16to8.dat");
+	}
 }
 
 /*

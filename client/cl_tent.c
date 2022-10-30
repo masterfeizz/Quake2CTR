@@ -75,7 +75,6 @@ cl_sustain_t	cl_sustains[MAX_SUSTAINS];
 extern void CL_TeleportParticles (vec3_t org);
 //PGM
 
-void CL_BlasterParticles (vec3_t org, vec3_t dir);
 void CL_ExplosionParticles (vec3_t org);
 void CL_BFGExplosionParticles (vec3_t org);
 // RAFAEL
@@ -158,9 +157,9 @@ void CL_RegisterTEntSounds (void)
 	cl_sfx_lightning = S_RegisterSound ("weapons/tesla.wav");
 	cl_sfx_disrexp = S_RegisterSound ("weapons/disrupthit.wav");
 	// version stuff
-	sprintf (name, "weapons/sound%d.wav", ROGUE_VERSION_ID);
-	if (name[0] == 'w')
-		name[0] = 'W';
+//	sprintf (name, "weapons/sound%d.wav", ROGUE_VERSION_ID);
+//	if (name[0] == 'w')
+//		name[0] = 'W';
 //PGM
 }	
 
@@ -203,7 +202,6 @@ re.RegisterPic ("a_grenades");
 	cl_mod_heatbeam = re.RegisterModel ("models/proj/beam/tris.md2");
 	cl_mod_monster_heatbeam = re.RegisterModel ("models/proj/widowbeam/tris.md2");
 //ROGUE
-
 }	
 
 /*
@@ -788,18 +786,18 @@ void CL_ParseTEnt (void)
 		color = MSG_ReadByte (&net_message);
 		CL_ParticleEffect2 (pos, dir, color, cnt);
 		break;
-
+#if 0 // Knightmare- removed for redundancy
 	// RAFAEL
-	case TE_BLUEHYPERBLASTER:
+/*	case TE_BLUEHYPERBLASTER:
 		MSG_ReadPos (&net_message, pos);
 		MSG_ReadPos (&net_message, dir);
-		CL_BlasterParticles (pos, dir);
+		CL_BlasterParticles (pos, dir, 0x6f);
 		break;
-
+*/	
 	case TE_BLASTER:			// blaster hitting wall
 		MSG_ReadPos (&net_message, pos);
 		MSG_ReadDir (&net_message, dir);
-		CL_BlasterParticles (pos, dir);
+		CL_BlasterParticles (pos, dir, 0xe0);
 
 		ex = CL_AllocExplosion ();
 		VectorCopy (pos, ex->ent.origin);
@@ -824,7 +822,7 @@ void CL_ParseTEnt (void)
 		ex->frames = 4;
 		S_StartSound (pos,  0, 0, cl_sfx_lashit, 1, ATTN_NORM, 0);
 		break;
-		
+#endif	// end Knightmare	
 	case TE_RAILTRAIL:			// railgun effect
 		MSG_ReadPos (&net_message, pos);
 		MSG_ReadPos (&net_message, pos2);
@@ -998,16 +996,34 @@ void CL_ParseTEnt (void)
 //=============
 //PGM
 		// PMM -following code integrated for flechette (different color)
+	// Knightmare- changed to handle all blaster colors here
+	case TE_BLASTER:			// blaster hitting wall
 	case TE_BLASTER2:			// green blaster hitting wall
+//	case TE_REDBLASTER:			// red blaster hitting wall
+	case TE_BLUEHYPERBLASTER:	// blue blaster hitting wall
 	case TE_FLECHETTE:			// flechette
 		MSG_ReadPos (&net_message, pos);
-		MSG_ReadDir (&net_message, dir);
-		
+
+		if(type == TE_BLUEHYPERBLASTER) /* FS: R1Q2 expects it to be ReadPos, look very carefully at the commented out stuff above!  Public servers we host sending WritePos will bomb R1Q2 clients (and possibly Q2PRO) */
+		{
+			MSG_ReadPos (&net_message, dir);
+		}
+		else
+		{
+			MSG_ReadDir (&net_message, dir);
+		}
+
 		// PMM
 		if (type == TE_BLASTER2)
-			CL_BlasterParticles2 (pos, dir, 0xd0);
-		else
-			CL_BlasterParticles2 (pos, dir, 0x6f); // 75
+			CL_BlasterParticles (pos, dir, 0xd0);
+	//	else if (type == TE_REDBLASTER)
+	//		CL_BlasterParticles (pos, dir, 0xe4);
+		else if (type == TE_BLUEHYPERBLASTER)
+			CL_BlasterParticles (pos, dir, 0x74);
+		else if (type == TE_FLECHETTE)
+			CL_BlasterParticles (pos, dir, 0x6f); // 75
+		else // TE_BLASTER
+			CL_BlasterParticles (pos, dir, 0xe0);
 
 		ex = CL_AllocExplosion ();
 		VectorCopy (pos, ex->ent.origin);
@@ -1028,19 +1044,40 @@ void CL_ParseTEnt (void)
 		// PMM
 		if (type == TE_BLASTER2)
 			ex->ent.skinnum = 1;
-		else // flechette
+	//	else if (type == TE_REDBLASTER)
+	//		ex->ent.skinnum = 3;
+		else if (type == TE_FLECHETTE || type == TE_BLUEHYPERBLASTER)
 			ex->ent.skinnum = 2;
+		else // flechette
+			ex->ent.skinnum = 0;
 
 		ex->start = cl.frame.servertime - 100;
 		ex->light = 150;
 		// PMM
-		if (type == TE_BLASTER2)
+		if (type == TE_BLASTER2) {
+			ex->lightcolor[0] = 0.15;
 			ex->lightcolor[1] = 1;
-		else // flechette
-		{
+			ex->lightcolor[2] = 0.15;
+		}
+	/*	else if (type == TE_REDBLASTER) {
+			ex->lightcolor[0] = 0.75;
+			ex->lightcolor[1] = 0.41;
+			ex->lightcolor[2] = 0.19;
+		}*/
+		else if (type == TE_BLUEHYPERBLASTER) {
 			ex->lightcolor[0] = 0.19;
 			ex->lightcolor[1] = 0.41;
 			ex->lightcolor[2] = 0.75;
+		}	
+		else  if (type == TE_FLECHETTE) {
+			ex->lightcolor[0] = 0.39;
+			ex->lightcolor[1] = 0.61;
+			ex->lightcolor[2] = 0.75;
+		}
+		else { // TE_BLASTER	
+			ex->lightcolor[0] = 1;
+			ex->lightcolor[1] = 1;
+			ex->lightcolor[2] = 0;
 		}
 		ex->ent.model = cl_mod_explode;
 		ex->frames = 4;
@@ -1076,10 +1113,7 @@ void CL_ParseTEnt (void)
 		if (frand() < 0.5)
 			ex->baseframe = 15;
 		ex->frames = 15;
-		if (type == TE_ROCKET_EXPLOSION_WATER)
-			S_StartSound (pos, 0, 0, cl_sfx_watrexp, 1, ATTN_NORM, 0);
-		else
-			S_StartSound (pos, 0, 0, cl_sfx_rockexp, 1, ATTN_NORM, 0);
+		S_StartSound (pos, 0, 0, cl_sfx_rockexp, 1, ATTN_NORM, 0);
 		break;
 
 	case TE_FLASHLIGHT:
@@ -1354,7 +1388,7 @@ void CL_AddPlayerBeams (void)
 	float		yaw, pitch;
 	float		forward;
 	float		len, steps;
-	int			framenum;
+	int			framenum = 0; /* FS: Compiler warning */
 	float		model_length;
 	
 	float		hand_multiplier;
@@ -1364,9 +1398,9 @@ void CL_AddPlayerBeams (void)
 //PMM
 	if (hand)
 	{
-		if (hand->value == 2)
+		if (hand->intValue == 2)
 			hand_multiplier = 0;
-		else if (hand->value == 1)
+		else if (hand->intValue == 1)
 			hand_multiplier = -1;
 		else
 			hand_multiplier = 1;
@@ -1406,14 +1440,13 @@ void CL_AddPlayerBeams (void)
 				VectorMA (b->start, (hand_multiplier * b->offset[0]), cl.v_right, org);
 				VectorMA (     org, b->offset[1], cl.v_forward, org);
 				VectorMA (     org, b->offset[2], cl.v_up, org);
-				if ((hand) && (hand->value == 2)) {
+				if ((hand) && (hand->intValue == 2)) {
 					VectorMA (org, -1, cl.v_up, org);
 				}
 				// FIXME - take these out when final
 				VectorCopy (cl.v_right, r);
 				VectorCopy (cl.v_forward, f);
 				VectorCopy (cl.v_up, u);
-
 			}
 			else
 				VectorCopy (b->start, org);
@@ -1442,7 +1475,7 @@ void CL_AddPlayerBeams (void)
 			VectorMA (dist, (hand_multiplier * b->offset[0]), r, dist);
 			VectorMA (dist, b->offset[1], f, dist);
 			VectorMA (dist, b->offset[2], u, dist);
-			if ((hand) && (hand->value == 2)) {
+			if ((hand) && (hand->intValue == 2)) {
 				VectorMA (org, -1, cl.v_up, org);
 			}
 		}
@@ -1558,7 +1591,7 @@ void CL_AddPlayerBeams (void)
 			{
 //				ent.flags = RF_FULLBRIGHT|RF_TRANSLUCENT;
 //				ent.alpha = 0.3;
-				ent.flags = RF_FULLBRIGHT;
+				ent.flags = RF_FULLBRIGHT|RF_WEAPONMODEL; /* FS: For fov > 90 viewmodel hack */
 				ent.angles[0] = -pitch;
 				ent.angles[1] = yaw + 180.0;
 				ent.angles[2] = (cl.time) % 360;
@@ -1670,6 +1703,9 @@ void CL_AddExplosions (void)
 			ent->skinnum = 0;
 			ent->flags |= RF_TRANSLUCENT;
 			break;
+		case ex_free: /* FS: Compiler warning */
+		case ex_explosion:
+			break;
 		}
 
 		if (ex->type == ex_free)
@@ -1719,13 +1755,17 @@ void CL_ProcessSustain ()
 	for (i=0, s=cl_sustains; i< MAX_SUSTAINS; i++, s++)
 	{
 		if (s->id)
+		{
 			if ((s->endtime >= cl.time) && (cl.time >= s->nextthink))
 			{
 //				Com_Printf ("think %d %d %d\n", cl.time, s->nextthink, s->thinkinterval);
 				s->think (s);
 			}
 			else if (s->endtime < cl.time)
+			{
 				s->id = 0;
+			}
+		}
 	}
 }
 

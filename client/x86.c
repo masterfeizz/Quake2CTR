@@ -20,7 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <stdlib.h>
 #include "client.h"
 
-#if id386
+#if (id386) && defined(_MSC_VER)
 
 static unsigned long bias;
 static unsigned long *histogram;
@@ -92,4 +92,4 @@ unsigned long *x86_TimerGetHistogram( void )
 	return histogram;
 }
 
-#endif
+#endif /* id386 && _MSC_VER*/

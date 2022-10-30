@@ -61,7 +61,7 @@ void SV_New_f (void)
 	int			playernum;
 	edict_t		*ent;
 
-	Com_DPrintf ("New() from %s\n", sv_client->name);
+	Com_DPrintf(DEVELOPER_MSG_SERVER, "New() from %s\n", sv_client->name);
 
 	if (sv_client->state != cs_connected)
 	{
@@ -123,9 +123,10 @@ SV_Configstrings_f
 */
 void SV_Configstrings_f (void)
 {
-	int			start;
+	int	startPos, start;
+	int	max_packet_len; /* FS: Added */
 
-	Com_DPrintf ("Configstrings() from %s\n", sv_client->name);
+	Com_DPrintf(DEVELOPER_MSG_SERVER, "Configstrings() from %s\n", sv_client->name);
 
 	if (sv_client->state != cs_connected)
 	{
@@ -141,11 +142,27 @@ void SV_Configstrings_f (void)
 		return;
 	}
 	
-	start = atoi(Cmd_Argv(2));
+//	start = atoi(Cmd_Argv(2));
+	startPos = atoi(Cmd_Argv(2));
+	if (startPos < 0) // r1ch's fix for negative index
+	{
+		Com_Printf ("Illegal configstrings request (negative index) from %s[%s], dropping client\n", sv_client->name, NET_AdrToString(sv_client->netchan.remote_address));
+		SV_DropClient (sv_client);
+		return;
+	}
+	start = startPos;
+
+	if((maxclients->intValue == 1) && (sv_client->netchan.remote_address.type == NA_LOOPBACK))
+	{
+		max_packet_len = MAX_MSGLEN; /* FS: For sending configstrings and baselines.  Much faster start-ups */
+	}
+	else
+	{
+		max_packet_len = MAX_MSGLEN_MP / 2;
+	}
 
 	// write a packet full of data
-
-	while ( sv_client->netchan.message.cursize < MAX_MSGLEN/2 
+	while ( sv_client->netchan.message.cursize < max_packet_len 
 		&& start < MAX_CONFIGSTRINGS)
 	{
 		if (sv.configstrings[start][0])
@@ -178,11 +195,12 @@ SV_Baselines_f
 */
 void SV_Baselines_f (void)
 {
-	int		start;
+	int	startPos, start;
+	int	max_packet_len; /* FS: Added */
 	entity_state_t	nullstate;
 	entity_state_t	*base;
 
-	Com_DPrintf ("Baselines() from %s\n", sv_client->name);
+	Com_DPrintf(DEVELOPER_MSG_SERVER, "Baselines() from %s\n", sv_client->name);
 
 	if (sv_client->state != cs_connected)
 	{
@@ -198,13 +216,30 @@ void SV_Baselines_f (void)
 		return;
 	}
 	
-	start = atoi(Cmd_Argv(2));
+//	start = atoi(Cmd_Argv(2));
+	startPos = atoi(Cmd_Argv(2));
+	if (startPos < 0) // r1ch's fix for negative index
+	{
+		Com_Printf ("Illegal baselines request (negative index) from %s[%s], dropping client\n", sv_client->name, NET_AdrToString(sv_client->netchan.remote_address));
+		SV_DropClient (sv_client);
+		return;
+	}
+	start = startPos;
+
+	if((maxclients->intValue == 1) && (sv_client->netchan.remote_address.type == NA_LOOPBACK))
+	{
+		max_packet_len = MAX_MSGLEN; /* FS: For sending configstrings and baselines.  Much faster start-ups */
+	}
+	else
+	{
+		max_packet_len = MAX_MSGLEN_MP / 2;
+	}
 
 	memset (&nullstate, 0, sizeof(nullstate));
 
 	// write a packet full of data
 
-	while ( sv_client->netchan.message.cursize <  MAX_MSGLEN/2
+	while ( sv_client->netchan.message.cursize <  max_packet_len
 		&& start < MAX_EDICTS)
 	{
 		base = &sv.baselines[start];
@@ -237,7 +272,15 @@ SV_Begin_f
 */
 void SV_Begin_f (void)
 {
-	Com_DPrintf ("Begin() from %s\n", sv_client->name);
+	Com_DPrintf(DEVELOPER_MSG_SERVER, "Begin() from %s\n", sv_client->name);
+
+	// r1ch: could be abused to respawn or cause spam/other mod specific problems
+	if (sv_client->state != cs_connected)
+	{
+		Com_Printf ("EXPLOIT: Illegal 'begin' from %s[%s] (already spawned), client dropped.\n", sv_client->name, NET_AdrToString (sv_client->netchan.remote_address));
+		SV_DropClient (sv_client);
+		return;
+	}
 
 	// handle the case of a level changing while a client was connecting
 	if ( atoi(Cmd_Argv(1)) != svs.spawncount )
@@ -248,7 +291,7 @@ void SV_Begin_f (void)
 	}
 
 	sv_client->state = cs_spawned;
-
+	
 	// call the game begin function
 	ge->ClientBegin (sv_player);
 
@@ -299,14 +342,16 @@ void SV_NextDownload_f (void)
 SV_BeginDownload_f
 ==================
 */
-void SV_BeginDownload_f(void)
+void SV_BeginDownload_f (void)
 {
-	char	*name;
+	char	*name, *p;
 	extern	cvar_t *allow_download;
 	extern	cvar_t *allow_download_players;
 	extern	cvar_t *allow_download_models;
 	extern	cvar_t *allow_download_sounds;
 	extern	cvar_t *allow_download_maps;
+	size_t		length;
+	qboolean	valid;
 	extern	int		file_from_pak; // ZOID did file come from pak?
 	int offset = 0;
 
@@ -315,9 +360,61 @@ void SV_BeginDownload_f(void)
 	if (Cmd_Argc() > 2)
 		offset = atoi(Cmd_Argv(2)); // downloaded offset
 
+	// r1ch fix: name is always filtered for security reasons
+	StripHighBits (name, 1);
+
+	// r1ch: ugly hack to allow server to see clients who are using http dl.
+	if (!strcmp (name, "http"))
+	{
+		if (sv_client->download)
+			SV_DropClient (sv_client);
+		else
+			sv_client->downloadsize = 1;
+		return;
+	}
+
 	// hacked by zoid to allow more conrol over download
 	// first off, no .. or global allow check
-	if (strstr (name, "..") || !allow_download->value
+
+	// r1ch fix: for  some ./ references in maps, eg ./textures/map/file
+	length = strlen(name);
+	p = name;
+	while ((p = strstr (p, "./")))
+	{
+		memmove (p, p+2, length - (p - name) - 1);
+		length -= 2;
+	}
+
+	// r1ch fix: block the really nasty ones - \server.cfg will download from mod root on win32, .. is obvious
+	if (name[0] == '\\' || strstr (name, ".."))
+	{
+		Com_Printf ("Refusing illegal download path %s to %s\n", name, sv_client->name);
+		MSG_WriteByte (&sv_client->netchan.message, svc_download);
+		MSG_WriteShort (&sv_client->netchan.message, -1);
+		MSG_WriteByte (&sv_client->netchan.message, 0);
+		Com_Printf ("Client %s[%s] tried to download illegal path: %s\n", sv_client->name, NET_AdrToString (sv_client->netchan.remote_address), name);
+		SV_DropClient (sv_client);
+		return;
+	}
+	else if (offset < 0) // r1ch fix: negative offset will crash on read
+	{
+		Com_Printf ("Refusing illegal download offset %d to %s\n", offset, sv_client->name);
+		MSG_WriteByte (&sv_client->netchan.message, svc_download);
+		MSG_WriteShort (&sv_client->netchan.message, -1);
+		MSG_WriteByte (&sv_client->netchan.message, 0);
+		Com_Printf ("Client %s[%s] supplied illegal download offset for %s: %d\n", sv_client->name, NET_AdrToString (sv_client->netchan.remote_address), name, offset);
+		SV_DropClient (sv_client);
+		return;
+	}
+	else if ( !length || name[0] == 0 // empty name, maybe as result of ./ normalize
+			|| !IsValidChar(name[0])
+			// r1ch: \ is bad in general, client won't even write properly if we do sent it
+			|| strchr (name, '\\')
+			// MUST be in a subdirectory, unless a pk3	
+			|| (!strchr(name, '/'))
+			// r1ch: another bug, maps/. will fopen(".") -> crash
+			|| !IsValidChar(name[length-1]) )
+/*	if (strstr (name, "..") || !allow_download->value
 		// leading dot is no good
 		|| *name == '.' 
 		// leading slash bad as well, must be in subdir
@@ -331,7 +428,7 @@ void SV_BeginDownload_f(void)
 		// now maps (note special case for maps, must not be in pak)
 		|| (strncmp(name, "maps/", 6) == 0 && !allow_download_maps->value)
 		// MUST be in a subdirectory	
-		|| !strstr (name, "/") )	
+		|| !strstr (name, "/") )	*/
 	{	// don't allow anything with .. path
 		MSG_WriteByte (&sv_client->netchan.message, svc_download);
 		MSG_WriteShort (&sv_client->netchan.message, -1);
@@ -339,6 +436,22 @@ void SV_BeginDownload_f(void)
 		return;
 	}
 
+	valid = true;
+
+	if ( !allow_download->value
+		|| (strncmp(name, "players/", 8) == 0 && !allow_download_players->value)
+		|| (strncmp(name, "models/", 7) == 0 && !allow_download_models->value)
+		|| (strncmp(name, "sound/", 6) == 0 && !allow_download_sounds->value)
+		|| (strncmp(name, "maps/", 5) == 0 && !allow_download_maps->value) )
+		valid = false;
+
+	if (!valid)
+	{
+		MSG_WriteByte (&sv_client->netchan.message, svc_download);
+		MSG_WriteShort (&sv_client->netchan.message, -1);
+		MSG_WriteByte (&sv_client->netchan.message, 0);
+		return;
+	}
 
 	if (sv_client->download)
 		FS_FreeFile (sv_client->download);
@@ -352,9 +465,9 @@ void SV_BeginDownload_f(void)
 	if (!sv_client->download
 		// special check for maps, if it came from a pak file, don't allow
 		// download  ZOID
-		|| (strncmp(name, "maps/", 5) == 0 && file_from_pak))
+		|| (strncmp(name, "maps/", 5) == 0 && file_from_pak && !sv_allow_download_maps_in_paks->intValue)) /* FS: Allow bsp downloads from a pak file if we want to. */
 	{
-		Com_DPrintf ("Couldn't download %s to %s\n", name, sv_client->name);
+		Com_DPrintf(DEVELOPER_MSG_SERVER, "Couldn't download %s to %s\n", name, sv_client->name);
 		if (sv_client->download) {
 			FS_FreeFile (sv_client->download);
 			sv_client->download = NULL;
@@ -367,7 +480,7 @@ void SV_BeginDownload_f(void)
 	}
 
 	SV_NextDownload_f ();
-	Com_DPrintf ("Downloading %s to %s\n", name, sv_client->name);
+	Com_DPrintf(DEVELOPER_MSG_SERVER, "Downloading %s to %s\n", name, sv_client->name);
 }
 
 
@@ -398,7 +511,37 @@ Dumps the serverinfo info string
 */
 void SV_ShowServerinfo_f (void)
 {
-	Info_Print (Cvar_Serverinfo());
+//	Info_Print (Cvar_Serverinfo());
+	// r1ch: this is a client issued command !
+	char *s;
+	char *p;
+	int flip;
+
+	s = Cvar_Serverinfo();
+
+	// skip beginning \\ char
+	s++;
+
+	flip = 0;
+	p = s;
+
+	// make it more readable
+	while (p[0])
+	{
+		if (p[0] == '\\')
+		{
+			if (flip)
+				p[0] = '\n';
+			else
+				p[0] = '=';
+			flip ^= 1;
+		}
+		p++;
+	}
+
+	SV_GetUptime(); /* FS: Get uptime */
+	SV_ClientPrintf (sv_client, PRINT_HIGH, "%s\nuptime=%s\n", s, uptime_infostring);
+	// end r1ch fix
 }
 
 
@@ -413,7 +556,9 @@ void SV_Nextserver (void)
 	svs.spawncount++;	// make sure another doesn't sneak in
 	v = Cvar_VariableString ("nextserver");
 	if (!v[0])
+	{
 		Cbuf_AddText ("killserver\n");
+	}
 	else
 	{
 		Cbuf_AddText (v);
@@ -433,11 +578,11 @@ to the next server,
 void SV_Nextserver_f (void)
 {
 	if ( atoi(Cmd_Argv(1)) != svs.spawncount ) {
-		Com_DPrintf ("Nextserver() from wrong level, from %s\n", sv_client->name);
+		Com_DPrintf(DEVELOPER_MSG_SERVER, "Nextserver() from wrong level, from %s\n", sv_client->name);
 		return;		// leftover from last server
 	}
 
-	Com_DPrintf ("Nextserver() from %s\n", sv_client->name);
+	Com_DPrintf(DEVELOPER_MSG_SERVER, "Nextserver() from %s\n", sv_client->name);
 
 	SV_Nextserver ();
 }
@@ -478,7 +623,8 @@ void SV_ExecuteUserCommand (char *s)
 {
 	ucmd_t	*u;
 	
-	Cmd_TokenizeString (s, true);
+	Cmd_TokenizeString (s, false);	// Knightmare- password security fix, was true
+									// prevents players from reading rcon_password
 	sv_player = sv_client->edict;
 
 //	SV_BeginRedirect (RD_CLIENT);
@@ -489,6 +635,13 @@ void SV_ExecuteUserCommand (char *s)
 			u->func ();
 			break;
 		}
+
+	// r1ch: do we really want to be passing commands from unconnected players
+	// to the game dll at this point? doesn't sound like a good idea to me
+	// especially if the game dll does its own banning functions after connect
+	// as banned players could spam game commands (eg say) whilst connecting
+	if (sv_client->state < cs_spawned)
+		return;
 
 	if (!u->name && sv.state == ss_game)
 		ge->ClientCommand (sv_player);
@@ -513,7 +666,7 @@ void SV_ClientThink (client_t *cl, usercmd_t *cmd)
 
 	if (cl->commandMsec < 0 && sv_enforcetime->value )
 	{
-		Com_DPrintf ("commandMsec underflow from %s\n", cl->name);
+		Com_DPrintf(DEVELOPER_MSG_SERVER, "commandMsec underflow from %s\n", cl->name);
 		return;
 	}
 
@@ -575,7 +728,10 @@ void SV_ExecuteClientMessage (client_t *cl)
 			break;
 
 		case clc_userinfo:
+			s = Info_ValueForKey(cl->userinfo, "ip");
 			strncpy (cl->userinfo, MSG_ReadString (&net_message), sizeof(cl->userinfo)-1);
+			if (s)
+				Info_SetValueForKey(cl->userinfo, "ip", s);
 			SV_UserinfoChanged (cl);
 			break;
 
@@ -614,13 +770,13 @@ void SV_ExecuteClientMessage (client_t *cl)
 
 			if (calculatedChecksum != checksum)
 			{
-				Com_DPrintf ("Failed command checksum for %s (%d != %d)/%d\n", 
+				Com_DPrintf(DEVELOPER_MSG_SERVER, "Failed command checksum for %s (%d != %d)/%d\n", 
 					cl->name, calculatedChecksum, checksum, 
 					cl->netchan.incoming_sequence);
 				return;
 			}
 
-			if (!sv_paused->value)
+			if (!sv_paused->intValue)
 			{
 				net_drop = cl->netchan.dropped;
 				if (net_drop < 20)
@@ -661,4 +817,3 @@ void SV_ExecuteClientMessage (client_t *cl)
 		}
 	}
 }
-

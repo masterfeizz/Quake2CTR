@@ -20,21 +20,23 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "server.h"
 
-netadr_t	master_adr[MAX_MASTERS];	// address of group servers
+char uptime_infostring[80]; /* FS: Uptime for /info */
 
-client_t	*sv_client;			// current client
+netadr_t        master_adr[MAX_MASTERS];        // address of group servers
 
-cvar_t	*sv_paused;
-cvar_t	*sv_timedemo;
+client_t        *sv_client;                     // current client
 
-cvar_t	*sv_enforcetime;
+cvar_t  *sv_paused;
+cvar_t  *sv_timedemo;
 
-cvar_t	*timeout;				// seconds without any message
-cvar_t	*zombietime;			// seconds to sink messages after disconnect
+cvar_t  *sv_enforcetime;
 
-cvar_t	*rcon_password;			// password for remote server commands
+cvar_t  *timeout;                               // seconds without any message
+cvar_t  *zombietime;                    // seconds to sink messages after disconnect
 
-cvar_t	*allow_download;
+cvar_t  *rcon_password;                 // password for remote server commands
+
+cvar_t  *allow_download;
 cvar_t *allow_download_players;
 cvar_t *allow_download_models;
 cvar_t *allow_download_sounds;
@@ -42,15 +44,25 @@ cvar_t *allow_download_maps;
 
 cvar_t *sv_airaccelerate;
 
-cvar_t	*sv_noreload;			// don't reload level state when reentering
+cvar_t  *sv_noreload;                   // don't reload level state when reentering
 
-cvar_t	*maxclients;			// FIXME: rename sv_maxclients
-cvar_t	*sv_showclamp;
+cvar_t	*maxclients;                    // FIXME: rename sv_maxclients
 
-cvar_t	*hostname;
-cvar_t	*public_server;			// should heartbeats be sent
+cvar_t  *sv_showclamp;
 
-cvar_t	*sv_reconnect_limit;	// minimum seconds between connect messages
+cvar_t  *hostname;
+cvar_t  *public_server;                 // should heartbeats be sent
+
+cvar_t  *sv_iplimit;                    // r1ch: max connections from a single IP (prevent DoS)
+cvar_t  *sv_reconnect_limit;    // minimum seconds between connect messages
+cvar_t	*sv_entfile;	// Knightmare 6/25/12- cvar to control use of .ent files
+cvar_t	*sv_skipcinematics; /* FS: Skip cinematics if we want to. */
+cvar_t	*sv_allow_download_maps_in_paks; /* FS: Allow bsp downloads from a pak file if we want to. */
+cvar_t	*sv_downloadserver; /* FS: From R1Q2: HTTP Downloading */
+
+/* FS: Added these to filter out wallfly's spammy rcon status request every 30 seconds */
+cvar_t		*sv_filter_wallfly_rcon_request;
+cvar_t		*sv_filter_wallfly_ip;
 
 void Master_Shutdown (void);
 
@@ -85,11 +97,97 @@ void SV_DropClient (client_t *drop)
 		drop->download = NULL;
 	}
 
-	drop->state = cs_zombie;		// become free in a few seconds
+	// r1ch: fix for mods that don't clean score
+	if (drop->edict && drop->edict->client)
+		drop->edict->client->ps.stats[STAT_FRAGS] = 0;
+
+	drop->state = cs_zombie;                // become free in a few seconds
 	drop->name[0] = 0;
 }
 
 
+//Knightmare added
+/*
+=====================
+GetClientFromAdr
+
+Given an netadr_t, returns the matching client.
+=====================
+*/
+client_t *GetClientFromAdr (netadr_t address)
+{
+	client_t        *cl = NULL; /* FS: Compiler warning */
+	int                     i;
+	qboolean        found = false;
+
+	for (i = 0; i < maxclients->value; i++)
+	{
+		cl = &svs.clients[i];
+		if (NET_CompareBaseAdr(cl->netchan.remote_address, address)) {
+			found = true; break; }
+	}
+	if (found)
+		return cl;
+	else // don't return non-matching client
+		return NULL;
+}
+
+
+/*
+=====================
+SV_DropClientFromAdr
+
+Calls SV_DropClient, takes netadr_t instead of client pointer.
+=====================
+*/
+void SV_DropClientFromAdr (netadr_t address)
+{	// adapted Pat Aftermoon's simplified version of this
+	client_t *drop = GetClientFromAdr(address);
+
+	if (!drop)	return; // make sure we have a client to drop
+
+	SV_BroadcastPrintf (PRINT_HIGH, "dropping client %s\n", drop->name);
+
+	SV_DropClient (drop);
+
+	drop->state = cs_free;   // don't bother with zombie state 
+}
+// end Knightmare
+
+/*
+=====================
+SV_KickClient
+
+From R1Q2
+=====================
+*/
+void SV_KickClient (client_t *cl, const char *reason, const char *cprintf)
+{
+	if (reason && cl->state == cs_spawned && cl->name[0])
+		SV_BroadcastPrintf (PRINT_HIGH, "%s was dropped: %s\n", cl->name, reason);
+	if (cprintf)
+		SV_ClientPrintf (cl, PRINT_HIGH, "%s", cprintf);
+	Com_Printf ("Dropping %s, %s.\n", cl->name, reason ? reason : "SV_KickClient");
+	SV_DropClient (cl);
+}
+
+
+/*
+=====================
+SV_CleanClient
+
+From R1Q2
+r1ch: this does the final cleaning up of a client after zombie state.
+=====================
+*/
+void SV_CleanClient (client_t *drop)
+{
+	if (drop->download)
+	{
+		Z_Free (drop->download);
+		drop->download = NULL;
+	}
+}
 
 /*
 ==============================================================================
@@ -115,8 +213,17 @@ char	*SV_StatusString (void)
 	int		statusLength;
 	int		playerLength;
 
-	strcpy (status, Cvar_Serverinfo());
-	strcat (status, "\n");
+//	strncpy (status, Cvar_Serverinfo());
+//	strncat (status, "\n");
+	Q_strncpyz (status, Cvar_Serverinfo(), sizeof(status));
+
+	/* FS: Output uptime to info packets */
+	Q_strncatz (status, "\\uptime\\", sizeof(status));
+	SV_GetUptime();
+	Q_strncatz (status, uptime_infostring, sizeof(status));
+	/* FS: End */
+
+	Q_strncatz (status, "\n", sizeof(status));
 	statusLength = strlen(status);
 
 	for (i=0 ; i<maxclients->value ; i++)
@@ -129,7 +236,8 @@ char	*SV_StatusString (void)
 			playerLength = strlen(player);
 			if (statusLength + playerLength >= sizeof(status) )
 				break;		// can't hold any more
-			strcpy (status + statusLength, player);
+		//	strncpy (status + statusLength, player);
+			Q_strncpyz (status + statusLength, player, sizeof(status));
 			statusLength += playerLength;
 		}
 	}
@@ -162,7 +270,7 @@ SVC_Ack
 */
 void SVC_Ack (void)
 {
-	Com_Printf ("Ping acknowledge from %s\n", NET_AdrToString(net_from));
+	Com_DPrintf (DEVELOPER_MSG_NET, "Ping acknowledge from %s\n", NET_AdrToString(net_from)); /* FS: Was Com_Printf */
 }
 
 /*
@@ -176,16 +284,21 @@ The second parameter should be the current protocol version number.
 void SVC_Info (void)
 {
 	char	string[64];
+	char	hostname_string[17];
+	char	mapname_string[9];
 	int		i, count;
 	int		version;
 
-	if (maxclients->value == 1)
+	if (maxclients->intValue == 1)
 		return;		// ignore in single player
 
 	version = atoi (Cmd_Argv(1));
 
 	if (version != PROTOCOL_VERSION)
-		Com_sprintf (string, sizeof(string), "%s: wrong version\n", hostname->string, sizeof(string));
+	{	// According to r1ch, this can be used to make servers endlessly ping each other
+	//	Com_sprintf (string, sizeof(string), "%s: wrong version\n", hostname->string, sizeof(string));
+		return;
+	}
 	else
 	{
 		count = 0;
@@ -193,7 +306,12 @@ void SVC_Info (void)
 			if (svs.clients[i].state >= cs_connected)
 				count++;
 
-		Com_sprintf (string, sizeof(string), "%16s %8s %2i/%2i\n", hostname->string, sv.name, count, (int)maxclients->value);
+		/* FS: This can overflow if the hostname or mapname is long and makes string go over 64 chars.  So copy it and truncate it */
+		strncpy(hostname_string, hostname->string, sizeof(hostname_string)-1);
+
+		strncpy(mapname_string, sv.name, sizeof(mapname_string)-1);
+
+		Com_sprintf (string, sizeof(string), "%16s %8s %2i/%2i\n", hostname_string, mapname_string, count, (int)maxclients->value);
 	}
 
 	Netchan_OutOfBandPrint (NS_SERVER, net_from, "info\n%s", string);
@@ -276,22 +394,46 @@ void SVC_DirectConnect (void)
 	int			version;
 	int			qport;
 	int			challenge;
+	int			previousclients;	// rich: connection limit per IP
 
 	adr = net_from;
 
-	Com_DPrintf ("SVC_DirectConnect ()\n");
+	Com_DPrintf(DEVELOPER_MSG_SERVER, "SVC_DirectConnect ()\n");
 
 	version = atoi(Cmd_Argv(1));
 	if (version != PROTOCOL_VERSION)
 	{
 		Netchan_OutOfBandPrint (NS_SERVER, adr, "print\nServer is version %4.2f.\n", VERSION);
-		Com_DPrintf ("    rejected connect from version %i\n", version);
+		Com_DPrintf(DEVELOPER_MSG_SERVER, "    rejected connect from version %i\n", version);
 		return;
 	}
 
 	qport = atoi(Cmd_Argv(2));
 
 	challenge = atoi(Cmd_Argv(3));
+
+	// r1ch: limit connections from a single IP
+	previousclients = 0;
+	for (i=0,cl=svs.clients; i<(int)maxclients->value; i++,cl++)
+	{
+		if (cl->state == cs_free)
+			continue;
+		if (NET_CompareBaseAdr (adr, cl->netchan.remote_address))
+		{
+			// r1ch: zombies are less dangerous
+			if (cl->state == cs_zombie)
+				previousclients++;
+			else
+				previousclients += 2;
+		}
+	}
+	if (previousclients >= (int)sv_iplimit->value * 2)
+	{
+		Netchan_OutOfBandPrint (NS_SERVER, adr, "print\nToo many connections from your host.\n");
+		Com_DPrintf(DEVELOPER_MSG_SERVER, "    too many connections\n");
+		return;
+	}
+	// end r1ch fix
 
 	strncpy (userinfo, Cmd_Argv(4), sizeof(userinfo)-1);
 	userinfo[sizeof(userinfo) - 1] = 0;
@@ -344,10 +486,23 @@ void SVC_DirectConnect (void)
 		{
 			if (!NET_IsLocalAddress (adr) && (svs.realtime - cl->lastconnect) < ((int)sv_reconnect_limit->value * 1000))
 			{
-				Com_DPrintf ("%s:reconnect rejected : too soon\n", NET_AdrToString (adr));
+				Com_DPrintf(DEVELOPER_MSG_SERVER, "%s:reconnect rejected : too soon\n", NET_AdrToString (adr));
 				return;
 			}
+			// r1ch: !! fix nasty bug where non-disconnected clients (from dropped disconnect
+			// packets) could be overwritten!
+			if (cl->state != cs_zombie)
+			{
+				Com_DPrintf(DEVELOPER_MSG_SERVER, "    client already found\n");
+				// If we legitly get here, spoofed udp isn't possible (passed challenge) and client addr/port combo
+				// is exactly the same, so we can assume its really a dropped/crashed client. i hope...
+				Com_Printf ("Dropping %s, ghost reconnect\n", cl->name);
+				SV_DropClient (cl);
+			}
+			// end r1ch fix
 			Com_Printf ("%s:reconnect\n", NET_AdrToString (adr));
+
+			SV_CleanClient (cl);	// r1ch: clean up last client data
 			newcl = cl;
 			goto gotnewcl;
 		}
@@ -366,7 +521,7 @@ void SVC_DirectConnect (void)
 	if (!newcl)
 	{
 		Netchan_OutOfBandPrint (NS_SERVER, adr, "print\nServer is full.\n");
-		Com_DPrintf ("Rejected a connection.\n");
+		Com_DPrintf(DEVELOPER_MSG_SERVER, "Rejected a connection.\n");
 		return;
 	}
 
@@ -389,7 +544,7 @@ gotnewcl:
 				Info_ValueForKey (userinfo, "rejmsg"));
 		else
 			Netchan_OutOfBandPrint (NS_SERVER, adr, "print\nConnection refused.\n" );
-		Com_DPrintf ("Game rejected a connection.\n");
+		Com_DPrintf(DEVELOPER_MSG_SERVER, "Game rejected a connection.\n");
 		return;
 	}
 
@@ -397,14 +552,21 @@ gotnewcl:
 	strncpy (newcl->userinfo, userinfo, sizeof(newcl->userinfo)-1);
 	SV_UserinfoChanged (newcl);
 
-	// send the connect packet to the client
-	Netchan_OutOfBandPrint (NS_SERVER, adr, "client_connect");
+	// r1: note we could ideally send this twice but it prints unsightly message on original client.
+	if (sv_downloadserver->string[0])
+		Netchan_OutOfBandPrint (NS_SERVER, adr, "client_connect dlserver=%s", sv_downloadserver->string);
+	else
+		Netchan_OutOfBandPrint (NS_SERVER, adr, "client_connect");
 
 	Netchan_Setup (NS_SERVER, &newcl->netchan , adr, qport);
 
 	newcl->state = cs_connected;
-	
+
 	SZ_Init (&newcl->datagram, newcl->datagram_buf, sizeof(newcl->datagram_buf) );
+	if ((maxclients->intValue > 1) && !(newcl->netchan.remote_address.type == NA_LOOPBACK)) /* FS: Enforce a 1400 MTU size for datagram packets. */
+	{
+		newcl->datagram.maxsize = MAX_MSGLEN_MP; /* FS: MAX_MSGLEN is now for single player */
+	}
 	newcl->datagram.allowoverflow = true;
 	newcl->lastmessage = svs.realtime;	// don't timeout
 	newcl->lastconnect = svs.realtime;
@@ -415,10 +577,79 @@ int Rcon_Validate (void)
 	if (!strlen (rcon_password->string))
 		return 0;
 
-	if (strcmp (Cmd_Argv(1), rcon_password->string) )
+	if (strcmp (Cmd_Argv(1), rcon_password->string) != 0)
 		return 0;
 
 	return 1;
+}
+
+void SVC_FilterRconRequest(int i, char *ip, char* data) /* FS: Filter out spammy wallfly rcon status requests from tastyspleen connected servers :/ */
+{
+	char *ipNoPort = NULL;
+	char *ipToken = NULL;
+	char *ipPtr = NULL;
+	static const char seperators[] = ":\n";
+
+	qboolean bDoDPrintf = false;
+
+	if(!ip)
+	{
+		Com_Printf("No IP address for RCON request!\n");
+		return;
+	}
+
+	if(!data)
+	{
+		Com_Printf("No data for RCON request from: %s\n", ip);
+	}
+
+	ipNoPort = strdup(ip);
+
+	ipToken = strtok_r(ipNoPort, seperators, &ipPtr);
+	if(!ipToken)
+	{
+		Com_Printf("ipToken is NULL!\n");
+		return;
+	}
+
+	if(sv_filter_wallfly_rcon_request->intValue)
+	{
+		if(!Q_stricmp(ipToken, sv_filter_wallfly_ip->string))
+		{
+			bDoDPrintf = true;
+		}
+		else
+		{
+			bDoDPrintf = false;
+		}
+	}
+	else
+	{
+		bDoDPrintf = false;
+	}
+
+	if(bDoDPrintf)
+	{
+		if (i == 0)
+		{
+			Com_DPrintf (DEVELOPER_MSG_SERVER, "Bad rcon from %s:\n%s\n", ip, net_message.data+4);
+		}
+		else
+		{
+			Com_DPrintf (DEVELOPER_MSG_SERVER, "Rcon from %s:\n%s\n", ip, net_message.data+4);
+		}
+	}
+	else
+	{
+		if (i == 0)
+		{
+			Com_Printf ("Bad rcon from %s:\n%s\n", ip, net_message.data+4);
+		}
+		else
+		{
+			Com_Printf ("Rcon from %s:\n%s\n", ip, net_message.data+4);
+		}
+	}
 }
 
 /*
@@ -433,14 +664,11 @@ Redirect all printfs
 void SVC_RemoteCommand (void)
 {
 	int		i;
-	char	remaining[1024];
+	char	remaining[2048]; /* FS: From R1Q2: Was 1024 */
 
 	i = Rcon_Validate ();
 
-	if (i == 0)
-		Com_Printf ("Bad rcon from %s:\n%s\n", NET_AdrToString (net_from), net_message.data+4);
-	else
-		Com_Printf ("Rcon from %s:\n%s\n", NET_AdrToString (net_from), net_message.data+4);
+	SVC_FilterRconRequest(i, NET_AdrToString(net_from), (char *)net_message.data+4);
 
 	Com_BeginRedirect (RD_PACKET, sv_outputbuf, SV_OUTPUTBUF_LENGTH, SV_FlushRedirect);
 
@@ -487,7 +715,7 @@ void SV_ConnectionlessPacket (void)
 	Cmd_TokenizeString (s, false);
 
 	c = Cmd_Argv(0);
-	Com_DPrintf ("Packet %s : %s\n", NET_AdrToString(net_from), c);
+	Com_DPrintf(DEVELOPER_MSG_SERVER, "Packet %s : %s\n", NET_AdrToString(net_from), c);
 
 	if (!strcmp(c, "ping"))
 		SVC_Ping ();
@@ -642,7 +870,7 @@ void SV_ReadPackets (void)
 			break;
 		}
 		
-		if (i != maxclients->value)
+		if (i != maxclients->intValue)
 			continue;
 	}
 }
@@ -679,12 +907,15 @@ void SV_CheckTimeouts (void)
 		if (cl->state == cs_zombie
 		&& cl->lastmessage < zombiepoint)
 		{
+			SV_CleanClient (cl); // r1ch fix: make sure client is cleaned up
 			cl->state = cs_free;	// can now be reused
 			continue;
 		}
 		if ( (cl->state == cs_connected || cl->state == cs_spawned) 
 			&& cl->lastmessage < droppoint)
 		{
+			// r1ch fix: only message if they spawned (less spam plz)
+			if (cl->state == cs_spawned && cl->name[0])
 			SV_BroadcastPrintf (PRINT_HIGH, "%s timed out\n", cl->name);
 			SV_DropClient (cl); 
 			cl->state = cs_free;	// don't bother with zombie state
@@ -722,7 +953,7 @@ SV_RunGameFrame
 */
 void SV_RunGameFrame (void)
 {
-	if (host_speeds->value)
+	if (host_speeds->intValue)
 		time_before_game = Sys_Milliseconds ();
 
 	// we always need to bump framenum, even if we
@@ -733,20 +964,20 @@ void SV_RunGameFrame (void)
 	sv.time = sv.framenum*100;
 
 	// don't run if paused
-	if (!sv_paused->value || maxclients->value > 1)
+	if (!sv_paused->intValue || maxclients->intValue > 1)
 	{
 		ge->RunFrame ();
 
 		// never get more than one tic behind
 		if (sv.time < svs.realtime)
 		{
-			if (sv_showclamp->value)
+			if (sv_showclamp->intValue)
 				Com_Printf ("sv highclamp\n");
 			svs.realtime = sv.time;
 		}
 	}
 
-	if (host_speeds->value)
+	if (host_speeds->intValue)
 		time_after_game = Sys_Milliseconds ();
 
 }
@@ -777,12 +1008,12 @@ void SV_Frame (int msec)
 	SV_ReadPackets ();
 
 	// move autonomous things around if enough time has passed
-	if (!sv_timedemo->value && svs.realtime < sv.time)
+	if (!sv_timedemo->intValue && svs.realtime < sv.time)
 	{
 		// never let the time get too far off
 		if (sv.time - svs.realtime > 100)
 		{
-			if (sv_showclamp->value)
+			if (sv_showclamp->intValue)
 				Com_Printf ("sv lowclamp\n");
 			svs.realtime = sv.time - 100;
 		}
@@ -829,11 +1060,12 @@ void Master_Heartbeat (void)
 	char		*string;
 	int			i;
 
-	
-	if (!dedicated->value)
+	// pgm post3.19 change, cvar pointer not validated before dereferencing
+	if (!dedicated || !dedicated->value)
 		return;		// only dedicated servers send heartbeats
 
-	if (!public_server->value)
+	// pgm post3.19 change, cvar pointer not validated before dereferencing
+	if (!public_server || !public_server->value)
 		return;		// a private dedicated game
 
 	// check for time wraparound
@@ -852,7 +1084,7 @@ void Master_Heartbeat (void)
 	for (i=0 ; i<MAX_MASTERS ; i++)
 		if (master_adr[i].port)
 		{
-			Com_Printf ("Sending heartbeat to %s\n", NET_AdrToString (master_adr[i]));
+			Com_DPrintf (DEVELOPER_MSG_NET, "Sending heartbeat to %s\n", NET_AdrToString (master_adr[i])); /* FS: Was Com_Printf */
 			Netchan_OutOfBandPrint (NS_SERVER, master_adr[i], "heartbeat\n%s", string);
 		}
 }
@@ -868,10 +1100,12 @@ void Master_Shutdown (void)
 {
 	int			i;
 
-	if (!dedicated->value)
+	// pgm post3.19 change, cvar pointer not validated before dereferencing
+	if (!dedicated || !dedicated->value)
 		return;		// only dedicated servers send heartbeats
 
-	if (!public_server->value)
+	// pgm post3.19 change, cvar pointer not validated before dereferencing
+	if (!public_server || !public_server->value)
 		return;		// a private dedicated game
 
 	// send to group master
@@ -879,7 +1113,7 @@ void Master_Shutdown (void)
 		if (master_adr[i].port)
 		{
 			if (i > 0)
-				Com_Printf ("Sending heartbeat to %s\n", NET_AdrToString (master_adr[i]));
+				Com_DPrintf (DEVELOPER_MSG_NET, "Sending heartbeat to %s\n", NET_AdrToString (master_adr[i])); /* FS: Was Com_Printf */
 			Netchan_OutOfBandPrint (NS_SERVER, master_adr[i], "shutdown");
 		}
 }
@@ -944,18 +1178,24 @@ Only called at quake2.exe startup, not for each game
 */
 void SV_Init (void)
 {
-	SV_InitOperatorCommands	();
+	SV_InitOperatorCommands ();
 
 	rcon_password = Cvar_Get ("rcon_password", "", 0);
 	Cvar_Get ("skill", "1", 0);
+	Cvar_SetDescription ("skill", "Skill level. (0 = Easy, 1 = Medium, 2 = Hard, 3 = Nightmare.)");
 	Cvar_Get ("deathmatch", "0", CVAR_LATCH);
 	Cvar_Get ("coop", "0", CVAR_LATCH);
 	Cvar_Get ("dmflags", va("%i", DF_INSTANT_ITEMS), CVAR_SERVERINFO);
 	Cvar_Get ("fraglimit", "0", CVAR_SERVERINFO);
 	Cvar_Get ("timelimit", "0", CVAR_SERVERINFO);
 	Cvar_Get ("cheats", "0", CVAR_SERVERINFO|CVAR_LATCH);
-	Cvar_Get ("protocol", va("%i", PROTOCOL_VERSION), CVAR_SERVERINFO|CVAR_NOSET);;
+	Cvar_Get ("protocol", va("%i", PROTOCOL_VERSION), CVAR_SERVERINFO|CVAR_NOSET);
+
+#ifdef DEDICATED_ONLY
+	maxclients = Cvar_Get ("maxclients", "8", CVAR_SERVERINFO | CVAR_LATCH);
+#else
 	maxclients = Cvar_Get ("maxclients", "1", CVAR_SERVERINFO | CVAR_LATCH);
+#endif
 	hostname = Cvar_Get ("hostname", "noname", CVAR_SERVERINFO | CVAR_ARCHIVE);
 	timeout = Cvar_Get ("timeout", "125", 0);
 	zombietime = Cvar_Get ("zombietime", "2", 0);
@@ -963,17 +1203,41 @@ void SV_Init (void)
 	sv_paused = Cvar_Get ("paused", "0", 0);
 	sv_timedemo = Cvar_Get ("timedemo", "0", 0);
 	sv_enforcetime = Cvar_Get ("sv_enforcetime", "0", 0);
-	allow_download = Cvar_Get ("allow_download", "0", CVAR_ARCHIVE);
+	allow_download = Cvar_Get ("allow_download", "1", CVAR_ARCHIVE);
 	allow_download_players  = Cvar_Get ("allow_download_players", "0", CVAR_ARCHIVE);
 	allow_download_models = Cvar_Get ("allow_download_models", "1", CVAR_ARCHIVE);
 	allow_download_sounds = Cvar_Get ("allow_download_sounds", "1", CVAR_ARCHIVE);
-	allow_download_maps	  = Cvar_Get ("allow_download_maps", "1", CVAR_ARCHIVE);
+	allow_download_maps = Cvar_Get ("allow_download_maps", "1", CVAR_ARCHIVE);
+// Knightmare 6/25/12- cvar to control use of .ent files
+	sv_entfile = Cvar_Get ("sv_entfile", "1", CVAR_ARCHIVE);
+	Cvar_SetDescription("sv_entfile", "Toggle the use of .ent files.");
+
+	/* FS: Added */
+	sv_skipcinematics = Cvar_Get ("sv_skipcinematics", "0", CVAR_ARCHIVE);
+	Cvar_SetDescription("sv_skipcinematics", "Skip the loading of *.cin cinematics");
+
+	/* FS: Allow bsp downloads from a pak file if we want to. */
+	sv_allow_download_maps_in_paks = Cvar_Get ("sv_allow_download_maps_in_paks", "1", 0);
+	Cvar_SetDescription("sv_allow_download_maps_in_paks", "Allow BSP downloads accessed from a PAK file.");
+
+	/* FS: From R1Q2: HTTP Downloading */
+	sv_downloadserver = Cvar_Get ("sv_downloadserver", "", 0);
+	Cvar_SetDescription("sv_downloadserver", "URL to a location where clients can download game content over HTTP. Default empty.  Path leads to game dir name.  i.e. quake2.com/baseq2/maps\n");
+
+	/* FS: Added these to filter out wallfly's spammy rcon status request every 30 seconds */
+	sv_filter_wallfly_rcon_request = Cvar_Get ("sv_filter_wallfly_rcon_request", "0", 0);
+	Cvar_SetDescription("sv_filter_wallfly_rcon_request", "Filter rcon requests from WallFly[BZZZ]/Tastyspleen linked servers.  If set, sv_filter_wallfly_ip is needed and DEVELOPER_MSG_SERVER will be required to see WallFly RCONs.");
+	sv_filter_wallfly_ip = Cvar_Get ("sv_filter_wallfly_ip", "23.227.170.221", 0);
+	Cvar_SetDescription("sv_filter_wallfly_ip", "WallFly/Tastyspleen IP for filtering rcon requests.  Requires sv_filter_wallfly_rcon_request CVAR to be enabled.");
 
 	sv_noreload = Cvar_Get ("sv_noreload", "0", 0);
 
 	sv_airaccelerate = Cvar_Get("sv_airaccelerate", "0", CVAR_LATCH);
 
 	public_server = Cvar_Get ("public", "0", 0);
+
+	sv_iplimit = Cvar_Get ("sv_iplimit", "3", 0);	/* r1ch: limit connections per ip address (stop zombie dos/flood) */
+	Cvar_SetDescription("sv_iplimit", "Limit connections per IP address.  Stops zombie DoS/Flood.");
 
 	sv_reconnect_limit = Cvar_Get ("sv_reconnect_limit", "3", CVAR_ARCHIVE);
 
@@ -992,9 +1256,9 @@ to totally exit after returning from this function.
 */
 void SV_FinalMessage (char *message, qboolean reconnect)
 {
-	int			i;
-	client_t	*cl;
-	
+	int                     i;
+	client_t        *cl;
+        
 	SZ_Clear (&net_message);
 	MSG_WriteByte (&net_message, svc_print);
 	MSG_WriteByte (&net_message, PRINT_HIGH);
@@ -1010,13 +1274,11 @@ void SV_FinalMessage (char *message, qboolean reconnect)
 
 	for (i=0, cl = svs.clients ; i<maxclients->value ; i++, cl++)
 		if (cl->state >= cs_connected)
-			Netchan_Transmit (&cl->netchan, net_message.cursize
-			, net_message.data);
+			Netchan_Transmit (&cl->netchan, net_message.cursize, net_message.data);
 
 	for (i=0, cl = svs.clients ; i<maxclients->value ; i++, cl++)
 		if (cl->state >= cs_connected)
-			Netchan_Transmit (&cl->netchan, net_message.cursize
-			, net_message.data);
+			Netchan_Transmit (&cl->netchan, net_message.cursize, net_message.data);
 }
 
 
@@ -1051,5 +1313,18 @@ void SV_Shutdown (char *finalmsg, qboolean reconnect)
 	if (svs.demofile)
 		fclose (svs.demofile);
 	memset (&svs, 0, sizeof(svs));
+}
+
+void SV_GetUptime (void) /* FS: Uptime for /info */
+{
+	int	minutes, seconds, tens, units;
+
+	// time
+	minutes = (Sys_Milliseconds()/1000) / 60;
+	seconds = (Sys_Milliseconds()/1000) - 60*minutes;
+
+	tens = seconds / 10;
+	units = seconds - 10*tens;
+	Com_sprintf (uptime_infostring, sizeof(uptime_infostring), "%3i:%i%i", minutes, tens, units);
 }
 

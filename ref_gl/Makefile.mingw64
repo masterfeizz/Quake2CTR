@@ -1,0 +1,40 @@
+CC = gcc
+
+CFLAGS = -m64 -Wall -O2 -fno-strict-aliasing -fomit-frame-pointer -I ../win32/include
+CFLAGS+= -ffast-math
+CPPFLAGS = -DNDEBUG
+LDFLAGS = -m64 -shared -Wl,--enable-auto-image-base -Wl,--no-undefined
+LDLIBS = -lwinmm -lgdi32
+
+REFSOFT = ../game/q_shared.o \
+	../win32/q_shwin.o \
+	../win32/qgl_win.o \
+	../win32/glw_imp.o \
+	gl_draw.o \
+	gl_image.o \
+	gl_light.o \
+	gl_mesh.o \
+	gl_model.o \
+	gl_rmain.o \
+	gl_rmisc.o \
+	gl_rsurf.o \
+	gl_warp.o
+
+.PHONY: all test clean
+#
+
+OBJECTS = $(REFSOFT)
+
+all: ref_gl.dll
+
+ref_gl.dll: $(OBJECTS) ref_gl.def
+	$(CC) -o ref_gl.dll $(LDFLAGS) $(OBJECTS) ref_gl.def $(LDLIBS)
+
+clean:
+	rm -f *.o
+	rm -f ../win32/*.o
+	rm -f ../game/*.o
+
+%.o : %.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+

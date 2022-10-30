@@ -382,9 +382,9 @@ void R_InitCaches (void)
 	int		pix;
 
 	// calculate size to allocate
-	if (sw_surfcacheoverride->value)
+	if (sw_surfcacheoverride->intValue)
 	{
-		size = sw_surfcacheoverride->value;
+		size = sw_surfcacheoverride->intValue;
 	}
 	else
 	{
@@ -450,7 +450,7 @@ surfcache_t     *D_SCAlloc (int width, int size)
 	if ((size <= 0) || (size > 0x10000))
 		ri.Sys_Error (ERR_FATAL,"D_SCAlloc: bad cache size %d\n", size);
 	
-	size = (int)&((surfcache_t *)0)->data[size];
+	size = (int) ((intptr_t) &((surfcache_t *)0)->data[size]);
 	size = (size + 3) & ~3;
 	if (size > sc_size)
 		ri.Sys_Error (ERR_FATAL,"D_SCAlloc: %i > cache size of %i",size, sc_size);

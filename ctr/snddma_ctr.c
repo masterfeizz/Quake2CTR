@@ -23,10 +23,10 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "../client/snd_loc.h"
 #include <3ds.h>
 
-#define SAMPLE_RATE   	22050
+#define SAMPLE_RATE   	44100
 #define NUM_SAMPLES 	4096
 #define SAMPLE_SIZE		4
-#define BUFFER_SIZE 	NUM_SAMPLES*SAMPLE_SIZE
+#define BUFFER_SIZE 	NUM_SAMPLES * SAMPLE_SIZE
 
 static int sound_initialized = 0;
 static byte *audio_buffer;
@@ -40,7 +40,7 @@ qboolean SNDDMA_Init(void)
     	return false;
 
     //Force Quake to use our settings
-    Cvar_SetValue( "s_khz", 22 );
+    Cvar_SetValue( "s_khz", 44 );
 	Cvar_SetValue( "s_loadas8bit", false );
 
     audio_buffer = linearAlloc(BUFFER_SIZE);

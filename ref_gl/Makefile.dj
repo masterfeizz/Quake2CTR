@@ -1,0 +1,86 @@
+CC = gcc
+
+# enable evil 3dfx glide hacks for native hardware gamma:
+USE_3DFXGAMMA=1
+# abrash's asm optimizations:
+USE_ASM=1
+#
+USE_SSE=0
+
+CFLAGS = -Wall -O2 -fno-strict-aliasing -fomit-frame-pointer
+CPPFLAGS = -I../dos/3rdparty/include -I../dos/3rdparty/include/glide3
+DXE3GEN = dxe3gen
+
+#DXE_DEPS = -P gl.dxe
+
+# choose which dosgl api(s) to support. (at least one.)
+CPPFLAGS+= -DREFGL_FXMESA
+CPPFLAGS+= -DREFGL_MESA
+CPPFLAGS+= -DREFGL_SAGE
+
+ifeq ($(USE_3DFXGAMMA),1)
+FX_GAMMA:=../dos/fx_gamma.o
+CPPFLAGS += -DUSE_3DFXGAMMA
+else
+FX_GAMMA:=
+endif
+
+ifeq ($(USE_ASM),1)
+CPPFLAGS+= -Did386=1
+endif
+
+ifeq ($(USE_SSE),1)
+CFLAGS += -march=pentium3
+endif
+
+REFSOFT = ../game/q_shared.o \
+	../dos/q_shdos.o \
+	../dos/qgl_dos.o \
+	../dos/gl_fxmesa.o \
+	../dos/gl_dmesa.o \
+	../dos/gl_sage.o \
+	../dos/glimp_dos.o \
+	$(FX_GAMMA) \
+	gl_draw.o \
+	gl_image.o \
+	gl_light.o \
+	gl_mesh.o \
+	gl_model.o \
+	gl_rmain.o \
+	gl_rmisc.o \
+	gl_rsurf.o \
+	gl_warp.o
+
+ifeq ($(USE_ASM),1)
+REFASM = ../gas/math_ref.o \
+	../gas/math.o \
+	../gas/sys_dosa.o
+endif
+
+.PHONY: all test clean
+#
+
+OBJECTS = $(REFSOFT) $(REFASM)
+
+all: ref_gl.dxe
+
+ref_gl.dxe: $(OBJECTS)
+	$(DXE3GEN) -U -E _GetRefAPI $(DXE_DEPS) $(OBJECTS) -o ref_gl.dxe
+
+clean:
+	rm -f *.o
+	rm -f ../dos/*.o
+	rm -f ../game/*.o
+	rm -f ../gas/*.o
+
+DO_AS=$(CC) -x assembler-with-cpp
+
+%.o : %.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+
+%.o: %.S
+	$(DO_AS) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+
+%.o: %.s
+	$(DO_AS) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+

@@ -197,6 +197,13 @@ extern	cvar_t		*sv_airaccelerate;		// don't reload level state when reentering
 											// development tool
 extern	cvar_t		*sv_enforcetime;
 
+extern	cvar_t		*sv_skipcinematics; /* FS: skip cinematics if we want to. */
+extern	cvar_t		*sv_allow_download_maps_in_paks; /* FS: Allow bsp downloads from a pak file if we want to. */
+
+/* FS: Added these to filter out wallfly's spammy rcon status request every 30 seconds */
+extern	cvar_t		*sv_filter_wallfly_rcon_request;
+extern	cvar_t		*sv_filter_wallfly_ip;
+
 extern	client_t	*sv_client;
 extern	edict_t		*sv_player;
 
@@ -205,8 +212,11 @@ extern	edict_t		*sv_player;
 //
 // sv_main.c
 //
+extern char uptime_infostring[80]; /* FS: Uptime for /info */
 void SV_FinalMessage (char *message, qboolean reconnect);
 void SV_DropClient (client_t *drop);
+client_t *GetClientFromAdr (netadr_t address); // Knightmare added
+void SV_DropClientFromAdr (netadr_t address); // Knightmare added
 
 int SV_ModelIndex (char *name);
 int SV_SoundIndex (char *name);
@@ -223,6 +233,7 @@ void SV_UserinfoChanged (client_t *cl);
 
 void Master_Heartbeat (void);
 void Master_Packet (void);
+void SV_GetUptime (void); /* FS: Uptime for /info */
 
 //
 // sv_init.c
@@ -253,9 +264,9 @@ void SV_Multicast (vec3_t origin, multicast_t to);
 void SV_StartSound (vec3_t origin, edict_t *entity, int channel,
 					int soundindex, float volume,
 					float attenuation, float timeofs);
-void SV_ClientPrintf (client_t *cl, int level, char *fmt, ...);
-void SV_BroadcastPrintf (int level, char *fmt, ...);
-void SV_BroadcastCommand (char *fmt, ...);
+void SV_ClientPrintf (client_t *cl, int level, char *fmt, ...) __attribute__((__format__(__printf__,3,4)));
+void SV_BroadcastPrintf (int level, char *fmt, ...) __attribute__((__format__(__printf__,2,3)));
+void SV_BroadcastCommand (char *fmt, ...) __attribute__((__format__(__printf__,1,2)));
 
 //
 // sv_user.c
@@ -275,9 +286,6 @@ void SV_Status_f (void);
 void SV_WriteFrameToClient (client_t *client, sizebuf_t *msg);
 void SV_RecordDemoMessage (void);
 void SV_BuildClientFrame (client_t *client);
-
-
-void SV_Error (char *error, ...);
 
 //
 // sv_game.c

@@ -118,6 +118,11 @@ void	FloodAreaConnections (void);
 int		c_pointcontents;
 int		c_traces, c_brush_traces;
 
+ /* FS: sv_entfile and friends stuff */
+extern	cvar_t	*sv_entfile;
+qboolean	entToggle;
+char	entBSP[MAX_MAP_ENTSTRING+1];
+
 
 /*
 ===============================================================================
@@ -527,13 +532,59 @@ void CMod_LoadVisibility (lump_t *l)
 CMod_LoadEntityString
 =================
 */
-void CMod_LoadEntityString (lump_t *l)
+void CMod_LoadEntityString (lump_t *l, char *name)
 {
-	numentitychars = l->filelen;
-	if (l->filelen > MAX_MAP_ENTSTRING)
-		Com_Error (ERR_DROP, "Map has too large entity lump");
+	memcpy (entBSP, cmod_base + l->fileofs, l->filelen); /* FS: Copy the BSP ents to global char for dumping purposes. */
+	entBSP[l->filelen]=0; /* FS: Paranoia null terminator */
 
-	memcpy (map_entitystring, cmod_base + l->fileofs, l->filelen);
+	// Knightmare 6/25/12- optional .ent file loading
+	if (sv_entfile->intValue)
+	{
+		char		en[MAX_QPATH];
+		char		*buffer = NULL;
+		int			len, entStrLen;
+
+		len = strlen(name);
+		strncpy (en, name, sizeof(en));
+		en[len-3] = 'e';	en[len-2] = 'n';	en[len-1] = 't';
+		entStrLen = FS_LoadFile(en, (void **)&buffer);
+		if (buffer != NULL && entStrLen > 1)
+		{
+			if (entStrLen + 1 > sizeof(map_entitystring))
+			{
+				Com_Printf("CMod_LoadEntityString: .ent file %s too large: %i > %i.\n", en, entStrLen, MAX_MAP_ENTSTRING);
+				FS_FreeFile (buffer);
+			}
+			else
+			{
+				Com_Printf("CMod_LoadEntityString: .ent file %s loaded.\n", en);
+
+				numentitychars = entStrLen;
+				memset(map_entitystring, 0, sizeof(map_entitystring));
+				memcpy (map_entitystring, buffer, entStrLen);
+				map_entitystring[entStrLen] = '\0';
+				FS_FreeFile (buffer);
+				return;
+			}
+		}
+		else if (entStrLen != -1)	// catch too-small entfile
+		{
+			Com_Printf("CMod_LoadEntityString: .ent file %s too small.\n", en);
+			FS_FreeFile (buffer);
+		}
+		// fall back to bsp entity string if no .ent file loaded
+	}
+	// end Knightmare
+
+	numentitychars = l->filelen;
+
+	if (l->filelen + 1 > sizeof(map_entitystring)) // jit fix
+	{
+		Com_Error (ERR_DROP, "Map has too large entity lump");
+	}
+
+	memset(map_entitystring, 0, sizeof(map_entitystring));
+	memcpy(map_entitystring, cmod_base + l->fileofs, l->filelen);
 }
 
 
@@ -554,8 +605,17 @@ cmodel_t *CM_LoadMap (char *name, qboolean clientload, unsigned *checksum)
 	static unsigned	last_checksum;
 
 	map_noareas = Cvar_Get ("map_noareas", "0", 0);
+	/* FS: Check to see if entfile changed.  ->modified isn't working right, so I'll half ass this. */
+	if ((sv_entfile->intValue >= 1 && entToggle == false) || (sv_entfile->intValue == 0 && entToggle == true)) // Knightmare:  Logic adjustment
+		map_name[0] = 0;
 
-	if (  !strcmp (map_name, name) && (clientload || !Cvar_VariableValue ("flushmap")) )
+	/* FS: For checkin' later */
+	if (sv_entfile->intValue)
+		entToggle = true;
+	else
+		entToggle = false;
+
+	if ((name && !strcmp (map_name, name)) && (clientload || !Cvar_VariableValueInt("flushmap")))
 	{
 		*checksum = last_checksum;
 		if (!clientload)
@@ -617,7 +677,7 @@ cmodel_t *CM_LoadMap (char *name, qboolean clientload, unsigned *checksum)
 	CMod_LoadAreas (&header.lumps[LUMP_AREAS]);
 	CMod_LoadAreaPortals (&header.lumps[LUMP_AREAPORTALS]);
 	CMod_LoadVisibility (&header.lumps[LUMP_VISIBILITY]);
-	CMod_LoadEntityString (&header.lumps[LUMP_ENTITIES]);
+	CMod_LoadEntityString (&header.lumps[LUMP_ENTITIES], name); /* FS: Added name for sv_entfile stuff */
 
 	FS_FreeFile (buf);
 
@@ -1443,10 +1503,9 @@ Handles offseting and rotation of the end points for moving and
 rotating entities
 ==================
 */
-#ifdef _WIN32
+#ifdef _MSC_VER
 #pragma optimize( "", off )
 #endif
-
 
 trace_t		CM_TransformedBoxTrace (vec3_t start, vec3_t end,
 						  vec3_t mins, vec3_t maxs,
@@ -1466,7 +1525,7 @@ trace_t		CM_TransformedBoxTrace (vec3_t start, vec3_t end,
 
 	// rotate start and end into the models frame of reference
 	if (headnode != box_headnode && 
-	(angles[0] || angles[1] || angles[2]) )
+	    (angles[0] || angles[1] || angles[2]) )
 		rotated = true;
 	else
 		rotated = false;
@@ -1508,10 +1567,9 @@ trace_t		CM_TransformedBoxTrace (vec3_t start, vec3_t end,
 	return trace;
 }
 
-#ifdef _WIN32
+#ifdef _MSC_VER
 #pragma optimize( "", on )
 #endif
-
 
 
 /*
@@ -1559,7 +1617,7 @@ void CM_DecompressVis (byte *in, byte *out)
 		if ((out_p - out) + c > row)
 		{
 			c = row - (out_p - out);
-			Com_DPrintf ("warning: Vis decompression overrun\n");
+			Com_DPrintf(DEVELOPER_MSG_STANDARD, "warning: Vis decompression overrun\n");
 		}
 		while (c)
 		{
@@ -1661,7 +1719,7 @@ void	CM_SetAreaPortalState (int portalnum, qboolean open)
 
 qboolean	CM_AreasConnected (int area1, int area2)
 {
-	if (map_noareas->value)
+	if (map_noareas->intValue)
 		return true;
 
 	if (area1 > numareas || area2 > numareas)
@@ -1691,7 +1749,7 @@ int CM_WriteAreaBits (byte *buffer, int area)
 
 	bytes = (numareas+7)>>3;
 
-	if (map_noareas->value)
+	if (map_noareas->intValue)
 	{	// for debugging, send everything
 		memset (buffer, 255, bytes);
 	}

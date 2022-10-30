@@ -106,6 +106,7 @@ typedef struct
 	menucommon_s generic;
 
 	int curvalue;
+	int	maxvalue; /* FS: Added */
 
 	const char **itemnames;
 } menulist_s;

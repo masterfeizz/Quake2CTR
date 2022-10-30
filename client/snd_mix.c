@@ -22,7 +22,6 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "client.h"
 #include "snd_loc.h"
 
-#define	PAINTBUFFER_SIZE	2048
 portable_samplepair_t paintbuffer[PAINTBUFFER_SIZE];
 int		snd_scaletable[32][256];
 int 	*snd_p, snd_linear_count, snd_vol;
@@ -30,15 +29,13 @@ short	*snd_out;
 
 void S_WriteLinearBlastStereo16 (void);
 
-//#if !(defined __linux__ && defined __i386__)
-//#if	!id386
-
+#if	!id386
 void S_WriteLinearBlastStereo16 (void)
 {
 	int		i;
 	int		val;
 
-	for (i=0 ; i<snd_linear_count ; i+=2)
+	for (i = 0; i < snd_linear_count; i += 2)
 	{
 		val = snd_p[i]>>8;
 		if (val > 0x7fff)
@@ -57,8 +54,9 @@ void S_WriteLinearBlastStereo16 (void)
 			snd_out[i+1] = val;
 	}
 }
-//#else
-#if 0
+#endif
+
+#if (id386) && defined(_MSC_VER)
 __declspec( naked ) void S_WriteLinearBlastStereo16 (void)
 {
 	__asm {
@@ -103,7 +101,6 @@ LClampDone2:
 	}
 }
 
-//#endif
 #endif
 
 void S_TransferStereo16 (unsigned long *pbuf, int endtime)
@@ -153,14 +150,14 @@ void S_TransferPaintBuffer(int endtime)
 
 	pbuf = (unsigned long *)dma.buffer;
 
-	if (s_testsound->value)
+	if (s_testsound->intValue)
 	{
 		int		i;
 		int		count;
 
 		// write a fixed sine wave
 		count = (endtime - paintedtime);
-		for (i=0 ; i<count ; i++)
+		for (i = 0; i < count; i++)
 			paintbuffer[i].left = paintbuffer[i].right = sin((paintedtime+i)*0.1)*20000*256;
 	}
 
@@ -271,32 +268,31 @@ void S_PaintChannels(int endtime)
 
 			stop = (end < s_rawend) ? end : s_rawend;
 
-			for (i=paintedtime ; i<stop ; i++)
+			for (i = paintedtime; i < stop; i++)
 			{
 				s = i&(MAX_RAW_SAMPLES-1);
 				paintbuffer[i-paintedtime] = s_rawsamples[s];
 			}
-//		if (i != end)
-//			Com_Printf ("partial stream\n");
-//		else
-//			Com_Printf ("full stream\n");
-			for ( ; i<end ; i++)
+//			if (i != end)
+//				Com_Printf ("partial stream\n");
+//			else
+//				Com_Printf ("full stream\n");
+			for ( ; i < end; i++)
 			{
 				paintbuffer[i-paintedtime].left =
 				paintbuffer[i-paintedtime].right = 0;
 			}
 		}
 
-
 	// paint in the channels.
 		ch = channels;
-		for (i=0; i<MAX_CHANNELS ; i++, ch++)
+		for (i = 0; i < MAX_CHANNELS; i++, ch++)
 		{
 			ltime = paintedtime;
-		
+
 			while (ltime < end)
 			{
-				if (!ch->sfx || (!ch->leftvol && !ch->rightvol) )
+				if (!ch->sfx || (!ch->leftvol && !ch->rightvol))
 					break;
 
 				// max painting is to the end of the buffer
@@ -305,18 +301,18 @@ void S_PaintChannels(int endtime)
 				// might be stopped by running out of data
 				if (ch->end - ltime < count)
 					count = ch->end - ltime;
-		
+
 				sc = S_LoadSound (ch->sfx);
 				if (!sc)
 					break;
 
-				if (count > 0 && ch->sfx)
+				if (count > 0)
 				{	
 					if (sc->width == 1)// FIXME; 8 bit asm is wrong now
 						S_PaintChannelFrom8(ch, sc, count,  ltime - paintedtime);
 					else
 						S_PaintChannelFrom16(ch, sc, count, ltime - paintedtime);
-	
+
 					ltime += count;
 				}
 
@@ -339,7 +335,6 @@ void S_PaintChannels(int endtime)
 					}
 				}
 			}
-															  
 		}
 
 	// transfer out according to DMA format
@@ -354,18 +349,25 @@ void S_InitScaletable (void)
 	int		scale;
 
 	s_volume->modified = false;
-	for (i=0 ; i<32 ; i++)
+	for (i = 0; i < 32; i++)
 	{
 		scale = i * 8 * 256 * s_volume->value;
-		for (j=0 ; j<256 ; j++)
-			snd_scaletable[i][j] = ((signed char)j) * scale;
+		for (j = 0; j < 256; j++)
+		{
+		/* When compiling with gcc-4.1.0 at optimisations O1 and
+		   higher, the tricky signed char type conversion is not
+		   guaranteed. Therefore we explicity calculate the signed
+		   value from the index as required. From Kevin Shanahan.
+		   See: http://gcc.gnu.org/bugzilla/show_bug.cgi?id=26719
+		*/
+		//	snd_scaletable[i][j] = ((signed char)j) * scale;
+			snd_scaletable[i][j] = ((j < 128) ?  j : j - 256) * scale;
+		}
 	}
 }
 
 
-//#if !(defined __linux__ && defined __i386__)
-//#if	!id386
-
+#if	!id386
 void S_PaintChannelFrom8 (channel_t *ch, sfxcache_t *sc, int count, int offset)
 {
 	int 	data;
@@ -378,26 +380,27 @@ void S_PaintChannelFrom8 (channel_t *ch, sfxcache_t *sc, int count, int offset)
 		ch->leftvol = 255;
 	if (ch->rightvol > 255)
 		ch->rightvol = 255;
-		
-	lscale = snd_scaletable[ ch->leftvol >> 11];
-	rscale = snd_scaletable[ ch->rightvol >> 11];
-	sfx = (signed char *)sc->data + ch->pos;
+
+	//ZOID-- >>11 has been changed to >>3, >>11 didn't make much sense
+	//as it would always be zero.
+	lscale = snd_scaletable[ch->leftvol >> 3];
+	rscale = snd_scaletable[ch->rightvol >> 3];
+	sfx = (unsigned char *)sc->data + ch->pos;
 
 	samp = &paintbuffer[offset];
 
-	for (i=0 ; i<count ; i++, samp++)
+	for (i = 0; i < count; i++, samp++)
 	{
 		data = sfx[i];
 		samp->left += lscale[data];
 		samp->right += rscale[data];
 	}
-	
+
 	ch->pos += count;
 }
+#endif
 
-//#else
-#if 0
-
+#if (id386) && defined(_MSC_VER)
 __declspec( naked ) void S_PaintChannelFrom8 (channel_t *ch, sfxcache_t *sc, int count, int offset)
 {
 	__asm {
@@ -469,7 +472,6 @@ LDone:
 }
 
 #endif
-//#endif
 
 void S_PaintChannelFrom16 (channel_t *ch, sfxcache_t *sc, int count, int offset)
 {
@@ -485,7 +487,7 @@ void S_PaintChannelFrom16 (channel_t *ch, sfxcache_t *sc, int count, int offset)
 	sfx = (signed short *)sc->data + ch->pos;
 
 	samp = &paintbuffer[offset];
-	for (i=0 ; i<count ; i++, samp++)
+	for (i = 0; i < count; i++, samp++)
 	{
 		data = sfx[i];
 		left = (data * leftvol)>>8;

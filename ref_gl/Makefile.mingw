@@ -1,0 +1,67 @@
+CC = gcc
+
+# abrash's asm optimizations:
+USE_ASM=1
+#
+USE_SSE=0
+
+CFLAGS = -m32 -Wall -O2 -fno-strict-aliasing -fomit-frame-pointer -I../win32/include
+CPPFLAGS = -DNDEBUG
+LDFLAGS = -m32 -shared -Wl,--enable-auto-image-base -Wl,--no-undefined
+LDLIBS = -lwinmm -lgdi32
+
+ifeq ($(USE_ASM),1)
+CPPFLAGS+= -Did386=1
+endif
+
+ifeq ($(USE_SSE),1)
+CFLAGS += -march=pentium3
+endif
+
+REFSOFT = ../game/q_shared.o \
+	../win32/q_shwin.o \
+	../win32/qgl_win.o \
+	../win32/glw_imp.o \
+	gl_draw.o \
+	gl_image.o \
+	gl_light.o \
+	gl_mesh.o \
+	gl_model.o \
+	gl_rmain.o \
+	gl_rmisc.o \
+	gl_rsurf.o \
+	gl_warp.o
+
+ifeq ($(USE_ASM),1)
+REFASM = ../gas/math_ref.o \
+	../gas/math.o \
+	../gas/sys_dosa.o
+endif
+
+.PHONY: all test clean
+#
+
+OBJECTS = $(REFSOFT) $(REFASM)
+
+all: ref_gl.dll
+
+ref_gl.dll: $(OBJECTS) ref_gl.def
+	$(CC) -o ref_gl.dll $(LDFLAGS) $(OBJECTS) ref_gl.def $(LDLIBS)
+
+clean:
+	rm -f *.o
+	rm -f ../win32/*.o
+	rm -f ../game/*.o
+	rm -f ../gas/*.o
+
+DO_AS=$(CC) -x assembler-with-cpp
+
+%.o : %.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+
+%.o: %.S
+	$(DO_AS) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+
+%.o: %.s
+	$(DO_AS) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+

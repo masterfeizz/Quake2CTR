@@ -32,6 +32,8 @@ extern void MakeNormalVectors (vec3_t forward, vec3_t right, vec3_t up);
 /*
 ======
 vectoangles2 - this is duplicated in the game DLL, but I need it here.
+If this is changed, rogue/g_utils.c:vectoangles2() will probably need
+changing too..
 ======
 */
 void vectoangles2 (vec3_t value1, vec3_t angles)
@@ -1228,6 +1230,7 @@ void CL_ParticleSmokeEffect (vec3_t org, vec3_t dir, int color, int count, int m
 	}
 }
 
+#if 0 // Knightmare- removed these as redundant
 /*
 ===============
 CL_BlasterParticles2
@@ -1321,3 +1324,4 @@ void CL_BlasterTrail2 (vec3_t start, vec3_t end)
 		VectorAdd (move, vec, move);
 	}
 }
+#endif

@@ -18,6 +18,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 */
 #include "client.h"
+#include "snd_loc.h" /* FS: For S_StopBackgroundTrack() */
 
 typedef struct
 {
@@ -37,8 +38,8 @@ typedef struct
 	byte	*pic;
 	byte	*pic_pending;
 
-	// order 1 huffman stuff
-	int		*hnodes1;	// [256][256][2];
+	/* order 1 huffman stuff */
+	int		*hnodes1;	/* [256][256][2]; */
 	int		numhnodes1[256];
 
 	int		h_used[512];
@@ -72,16 +73,12 @@ void SCR_LoadPCX (char *filename, byte **pic, byte **palette, int *width, int *h
 
 	*pic = NULL;
 
-	//
-	// load the file
-	//
+	/* load the file */
 	len = FS_LoadFile (filename, (void **)&raw);
 	if (!raw)
 		return;	// Com_Printf ("Bad pcx file %s\n", filename);
 
-	//
-	// parse the PCX file
-	//
+	/* parse the PCX file */
 	pcx = (pcx_t *)raw;
 	raw = &pcx->data;
 
@@ -179,7 +176,7 @@ void SCR_StopCinematic (void)
 		cin.hnodes1 = NULL;
 	}
 
-	// switch back down to 11 khz sound if necessary
+	/* switch s_khz back to original value if necessary */
 	if (cin.restart_sound)
 	{
 		cin.restart_sound = false;
@@ -197,7 +194,7 @@ Called when either the cinematic completes, or it is aborted
 */
 void SCR_FinishCinematic (void)
 {
-	// tell the server to advance to the next map / cinematic
+	/* tell the server to advance to the next map / cinematic */
 	MSG_WriteByte (&cls.netchan.message, clc_stringcmd);
 	SZ_Print (&cls.netchan.message, va("nextserver %i\n", cl.servercount));
 }
@@ -260,12 +257,12 @@ void Huff1TableInit (void)
 		memset (cin.h_count,0,sizeof(cin.h_count));
 		memset (cin.h_used,0,sizeof(cin.h_used));
 
-		// read a row of counts
+		/* read a row of counts */
 		FS_Read (counts, sizeof(counts), cl.cinematic_file);
 		for (j=0 ; j<256 ; j++)
 			cin.h_count[j] = counts[j];
 
-		// build the nodes
+		/* build the nodes */
 		numhnodes = 256;
 		nodebase = cin.hnodes1 + prev*256*2;
 
@@ -273,10 +270,10 @@ void Huff1TableInit (void)
 		{
 			node = nodebase + (numhnodes-256)*2;
 
-			// pick two lowest counts
+			/* pick two lowest counts */
 			node[0] = SmallestNode1 (numhnodes);
 			if (node[0] == -1)
-				break;	// no more
+				break;	/* no more */
 
 			node[1] = SmallestNode1 (numhnodes);
 			if (node[1] == -1)
@@ -304,14 +301,13 @@ cblock_t Huff1Decompress (cblock_t in)
 	cblock_t	out;
 	int			inbyte;
 	int			*hnodes, *hnodesbase;
-//int		i;
 
-	// get decompressed count
+	/* get decompressed count */
 	count = in.data[0] + (in.data[1]<<8) + (in.data[2]<<16) + (in.data[3]<<24);
 	input = in.data + 4;
 	out_p = out.data = Z_Malloc (count);
 
-	// read bits
+	/* read bits */
 
 	hnodesbase = cin.hnodes1 - 256*2;	// nodes 0-255 aren't stored
 
@@ -320,7 +316,7 @@ cblock_t Huff1Decompress (cblock_t in)
 	while (count)
 	{
 		inbyte = *input++;
-		//-----------
+		/*-----------*/
 		if (nodenum < 256)
 		{
 			hnodes = hnodesbase + (nodenum<<9);
@@ -331,7 +327,7 @@ cblock_t Huff1Decompress (cblock_t in)
 		}
 		nodenum = hnodes[nodenum*2 + (inbyte&1)];
 		inbyte >>=1;
-		//-----------
+		/*-----------*/
 		if (nodenum < 256)
 		{
 			hnodes = hnodesbase + (nodenum<<9);
@@ -342,7 +338,7 @@ cblock_t Huff1Decompress (cblock_t in)
 		}
 		nodenum = hnodes[nodenum*2 + (inbyte&1)];
 		inbyte >>=1;
-		//-----------
+		/*-----------*/
 		if (nodenum < 256)
 		{
 			hnodes = hnodesbase + (nodenum<<9);
@@ -353,7 +349,7 @@ cblock_t Huff1Decompress (cblock_t in)
 		}
 		nodenum = hnodes[nodenum*2 + (inbyte&1)];
 		inbyte >>=1;
-		//-----------
+		/*-----------*/
 		if (nodenum < 256)
 		{
 			hnodes = hnodesbase + (nodenum<<9);
@@ -364,7 +360,7 @@ cblock_t Huff1Decompress (cblock_t in)
 		}
 		nodenum = hnodes[nodenum*2 + (inbyte&1)];
 		inbyte >>=1;
-		//-----------
+		/*-----------*/
 		if (nodenum < 256)
 		{
 			hnodes = hnodesbase + (nodenum<<9);
@@ -375,7 +371,7 @@ cblock_t Huff1Decompress (cblock_t in)
 		}
 		nodenum = hnodes[nodenum*2 + (inbyte&1)];
 		inbyte >>=1;
-		//-----------
+		/*-----------*/
 		if (nodenum < 256)
 		{
 			hnodes = hnodesbase + (nodenum<<9);
@@ -386,7 +382,7 @@ cblock_t Huff1Decompress (cblock_t in)
 		}
 		nodenum = hnodes[nodenum*2 + (inbyte&1)];
 		inbyte >>=1;
-		//-----------
+		/*-----------*/
 		if (nodenum < 256)
 		{
 			hnodes = hnodesbase + (nodenum<<9);
@@ -397,7 +393,7 @@ cblock_t Huff1Decompress (cblock_t in)
 		}
 		nodenum = hnodes[nodenum*2 + (inbyte&1)];
 		inbyte >>=1;
-		//-----------
+		/*-----------*/
 		if (nodenum < 256)
 		{
 			hnodes = hnodesbase + (nodenum<<9);
@@ -412,7 +408,7 @@ cblock_t Huff1Decompress (cblock_t in)
 
 	if (input - in.data != in.count && input - in.data != in.count+1)
 	{
-		Com_Printf ("Decompression overread by %i", (input - in.data) - in.count);
+		Com_Printf ("Decompression overread by %i", (int)((input - in.data) - in.count));
 	}
 	out.count = out_p - out.data;
 
@@ -435,7 +431,7 @@ byte *SCR_ReadNextFrame (void)
 	cblock_t	in, huf1;
 	int		start, end, count;
 
-	// read the next frame
+	/* read the next frame */
 	r = fread (&command, 4, 1, cl.cinematic_file);
 	if (r == 0)		// we'll give it one more chance
 		r = fread (&command, 4, 1, cl.cinematic_file);
@@ -444,29 +440,34 @@ byte *SCR_ReadNextFrame (void)
 		return NULL;
 	command = LittleLong(command);
 	if (command == 2)
-		return NULL;	// last frame marker
+		return NULL;	/* last frame marker */
 
 	if (command == 1)
-	{	// read palette
+	{	/* read palette */
 		FS_Read (cl.cinematicpalette, sizeof(cl.cinematicpalette), cl.cinematic_file);
-		cl.cinematicpalette_active=0;	// dubious....  exposes an edge case
+		cl.cinematicpalette_active=0;	/* dubious....  exposes an edge case */
 	}
 
-	// decompress the next frame
+	/* decompress the next frame */
 	FS_Read (&size, 4, cl.cinematic_file);
 	size = LittleLong(size);
 	if (size > sizeof(compressed) || size < 1)
 		Com_Error (ERR_DROP, "Bad compressed frame size");
 	FS_Read (compressed, size, cl.cinematic_file);
 
-	// read sound
+	/* read sound */
 	start = cl.cinematicframe*cin.s_rate/14;
 	end = (cl.cinematicframe+1)*cin.s_rate/14;
 	count = end - start;
 
 	FS_Read (samples, count*cin.s_width*cin.s_channels, cl.cinematic_file);
 
-	S_RawSamples (count, cin.s_rate, cin.s_width, cin.s_channels, samples);
+	if (cin.s_width == 2) {
+		for (r = 0; r < count * cin.s_channels; r++) {
+			((short *)samples)[r] = LittleShort(((short *)samples)[r]);
+		}
+	}
+	S_RawSamples (count, cin.s_rate, cin.s_width, cin.s_channels, samples, false);
 
 	in.data = compressed;
 	in.count = size;
@@ -498,10 +499,10 @@ void SCR_RunCinematic (void)
 	}
 
 	if (cl.cinematicframe == -1)
-		return;		// static image
+		return;		/* static image */
 
 	if (cls.key_dest != key_game)
-	{	// pause if menu or console is up
+	{	/* pause if menu or console is up */
 		cl.cinematictime = cls.realtime - cl.cinematicframe*1000/14;
 		return;
 	}
@@ -523,7 +524,7 @@ void SCR_RunCinematic (void)
 	{
 		SCR_StopCinematic ();
 		SCR_FinishCinematic ();
-		cl.cinematictime = 1;	// hack to get the black screen behind loading
+		cl.cinematictime = 1;	/* hack to get the black screen behind loading */
 		SCR_BeginLoadingPlaque ();
 		cl.cinematictime = 0;
 		return;
@@ -546,7 +547,7 @@ qboolean SCR_DrawCinematic (void)
 	}
 
 	if (cls.key_dest == key_menu)
-	{	// blank screen and pause if menu is up
+	{	/* blank screen and pause if menu is up */
 		re.CinematicSetPalette(NULL);
 		cl.cinematicpalette_active = false;
 		return true;
@@ -554,7 +555,7 @@ qboolean SCR_DrawCinematic (void)
 
 	if (!cl.cinematicpalette_active)
 	{
-		re.CinematicSetPalette(cl.cinematicpalette);
+		re.CinematicSetPalette((byte *)cl.cinematicpalette);
 		cl.cinematicpalette_active = true;
 	}
 
@@ -580,13 +581,16 @@ void SCR_PlayCinematic (char *arg)
 	char	name[MAX_OSPATH], *dot;
 	int		old_khz;
 
-	// make sure CD isn't playing music
+	/* make sure CD isn't playing music */
 	CDAudio_Stop();
 
+	/* FS: make sure OGG or WAV music isn't playing either */
+	S_StopBackgroundTrack();
+
 	cl.cinematicframe = 0;
-	dot = strstr (arg, ".");
+	dot = strchr (arg, '.');
 	if (dot && !strcmp (dot, ".pcx"))
-	{	// static pcx image
+	{	/* static pcx image */
 		Com_sprintf (name, sizeof(name), "pics/%s", arg);
 		SCR_LoadPCX (name, &cin.pic, &palette, &cin.width, &cin.height);
 		cl.cinematicframe = -1;
@@ -610,9 +614,9 @@ void SCR_PlayCinematic (char *arg)
 	FS_FOpenFile (name, &cl.cinematic_file);
 	if (!cl.cinematic_file)
 	{
-//		Com_Error (ERR_DROP, "Cinematic %s not found.\n", name);
+		Com_DPrintf (DEVELOPER_MSG_IO, "Cinematic %s not found.\n", name);
 		SCR_FinishCinematic ();
-		cl.cinematictime = 0;	// done
+		cl.cinematictime = 0;	/* done */
 		return;
 	}
 
@@ -634,12 +638,12 @@ void SCR_PlayCinematic (char *arg)
 
 	Huff1TableInit ();
 
-	// switch up to 22 khz sound if necessary
-	old_khz = Cvar_VariableValue ("s_khz");
-	if (old_khz != cin.s_rate/1000)
+	/* switch to 22 khz sound if necessary */
+	old_khz = Cvar_VariableValue ("s_khz"); /* FS: Necessary because otherwise it get's kind of skippy, even on fast computers */
+	if (old_khz != cin.s_rate)
 	{
 		cin.restart_sound = true;
-		Cvar_SetValue ("s_khz", cin.s_rate/1000);
+		Cvar_SetValue ("s_khz", cin.s_rate);
 		CL_Snd_Restart_f ();
 		Cvar_SetValue ("s_khz", old_khz);
 	}

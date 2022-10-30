@@ -66,14 +66,15 @@ void SV_ClientPrintf (client_t *cl, int level, char *fmt, ...)
 {
 	va_list		argptr;
 	char		string[1024];
-	
+
 	if (level < cl->messagelevel)
 		return;
-	
+
 	va_start (argptr,fmt);
-	vsprintf (string, fmt,argptr);
+	Q_vsnprintf (string, sizeof(string), fmt, argptr);
 	va_end (argptr);
-	
+	string[sizeof(string)-1] = 0;
+
 	MSG_WriteByte (&cl->netchan.message, svc_print);
 	MSG_WriteByte (&cl->netchan.message, level);
 	MSG_WriteString (&cl->netchan.message, string);
@@ -94,15 +95,16 @@ void SV_BroadcastPrintf (int level, char *fmt, ...)
 	int			i;
 
 	va_start (argptr,fmt);
-	vsprintf (string, fmt,argptr);
+	Q_vsnprintf (string, sizeof(string), fmt, argptr);
 	va_end (argptr);
-	
+	string[sizeof(string)-1] = 0;
+
 	// echo to console
-	if (dedicated->value)
+	if (dedicated->intValue)
 	{
 		char	copy[1024];
 		int		i;
-		
+
 		// mask off high bits
 		for (i=0 ; i<1023 && string[i] ; i++)
 			copy[i] = string[i]&127;
@@ -133,12 +135,13 @@ void SV_BroadcastCommand (char *fmt, ...)
 {
 	va_list		argptr;
 	char		string[1024];
-	
+
 	if (!sv.state)
 		return;
 	va_start (argptr,fmt);
-	vsprintf (string, fmt,argptr);
+	Q_vsnprintf (string, sizeof(string), fmt, argptr);
 	va_end (argptr);
+	string[sizeof(string)-1] = 0;
 
 	MSG_WriteByte (&sv.multicast, svc_stufftext);
 	MSG_WriteString (&sv.multicast, string);
@@ -183,7 +186,7 @@ void SV_Multicast (vec3_t origin, multicast_t to)
 	// if doing a serverrecord, store everything
 	if (svs.demofile)
 		SZ_Write (&svs.demo_multicast, sv.multicast.data, sv.multicast.cursize);
-	
+
 	switch (to)
 	{
 	case MULTICAST_ALL_R:
@@ -229,7 +232,7 @@ void SV_Multicast (vec3_t origin, multicast_t to)
 			area2 = CM_LeafArea (leafnum);
 			if (!CM_AreasConnected (area1, area2))
 				continue;
-			if ( mask && (!(mask[cluster>>3] & (1<<(cluster&7)) ) ) )
+			if (!(mask[cluster>>3] & (1<<(cluster&7))))
 				continue;
 		}
 
@@ -274,8 +277,8 @@ void SV_StartSound (vec3_t origin, edict_t *entity, int channel,
 					float attenuation, float timeofs)
 {       
 	int			sendchan;
-    int			flags;
-    int			i;
+	int			flags;
+	int			i;
 	int			ent;
 	vec3_t		origin_v;
 	qboolean	use_phs;
@@ -330,7 +333,10 @@ void SV_StartSound (vec3_t origin, edict_t *entity, int channel,
 		if (entity->solid == SOLID_BSP)
 		{
 			for (i=0 ; i<3 ; i++)
-				origin_v[i] = entity->s.origin[i]+0.5*(entity->mins[i]+entity->maxs[i]);
+			{
+				origin_v[i] = entity->s.origin[i] + 0.5f *
+							  (entity->mins[i] + entity->maxs[i]);
+			}
 		}
 		else
 		{
@@ -374,7 +380,7 @@ void SV_StartSound (vec3_t origin, edict_t *entity, int channel,
 		else
 			SV_Multicast (origin, MULTICAST_ALL);
 	}
-}           
+}
 
 
 /*
@@ -384,7 +390,6 @@ FRAME UPDATES
 
 ===============================================================================
 */
-
 
 
 /*
@@ -400,6 +405,12 @@ qboolean SV_SendClientDatagram (client_t *client)
 	SV_BuildClientFrame (client);
 
 	SZ_Init (&msg, msg_buf, sizeof(msg_buf));
+
+	if ((maxclients->intValue > 1) && !(client->netchan.remote_address.type == NA_LOOPBACK))
+	{
+		msg.maxsize = MAX_MSGLEN_MP; /* FS: MAX_MSGLEN is now for single player */
+	}
+
 	msg.allowoverflow = true;
 
 	// send over all the relevant entity_state_t
@@ -411,14 +422,14 @@ qboolean SV_SendClientDatagram (client_t *client)
 	// it is necessary for this to be after the WriteEntities
 	// so that entity references will be current
 	if (client->datagram.overflowed)
-		Com_Printf ("WARNING: datagram overflowed for %s\n", client->name);
+		Com_DPrintf (DEVELOPER_MSG_SERVER, "WARNING: datagram overflowed for %s [Cur: %d] [Max: %d]\n", client->name, client->datagram.cursize, client->datagram.maxsize);
 	else
 		SZ_Write (&msg, client->datagram.data, client->datagram.cursize);
 	SZ_Clear (&client->datagram);
 
 	if (msg.overflowed)
 	{	// must have room left for the packet header
-		Com_Printf ("WARNING: msg overflowed for %s\n", client->name);
+		Com_DPrintf (DEVELOPER_MSG_SERVER, "WARNING: msg overflowed for %s [Cur: %d] [Max: %d]\n", client->name, msg.cursize, msg.maxsize);
 		SZ_Clear (&msg);
 	}
 
@@ -500,7 +511,7 @@ void SV_SendClientMessages (void)
 	// read the next demo message if needed
 	if (sv.state == ss_demo && sv.demofile)
 	{
-		if (sv_paused->value)
+		if (sv_paused->intValue)
 			msglen = 0;
 		else
 		{

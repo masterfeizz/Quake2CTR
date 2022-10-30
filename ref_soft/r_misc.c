@@ -86,18 +86,12 @@ void D_ViewChanged (void)
 	d_zrowbytes = vid.width * 2;
 	d_zwidth = vid.width;
 
-	d_pix_min = r_refdef.vrect.width / 320;
-	if (d_pix_min < 1)
-		d_pix_min = 1;
-
-	d_pix_max = (int)((float)r_refdef.vrect.width / (320.0 / 4.0) + 0.5);
-	d_pix_shift = 8 - (int)((float)r_refdef.vrect.width / 320.0 + 0.5);
-	if (d_pix_max < 1)
-		d_pix_max = 1;
+	D_SetParticleSize(); // FS
 
 	d_vrectx = r_refdef.vrect.x;
 	d_vrecty = r_refdef.vrect.y;
 	d_vrectright_particle = r_refdef.vrectright - d_pix_max;
+
 	d_vrectbottom_particle =
 			r_refdef.vrectbottom - d_pix_max;
 
@@ -178,7 +172,6 @@ void R_PrintAliasStats (void)
 }
 
 
-
 /*
 ===================
 R_TransformFrustum
@@ -205,10 +198,7 @@ void R_TransformFrustum (void)
 	}
 }
 
-
-#if !(defined __linux__ && defined __i386__)
 #if !id386
-
 /*
 ================
 TransformVector
@@ -220,57 +210,7 @@ void TransformVector (vec3_t in, vec3_t out)
 	out[1] = DotProduct(in,vup);
 	out[2] = DotProduct(in,vpn);		
 }
-
-#else
-
-__declspec( naked ) void TransformVector( vec3_t vin, vec3_t vout )
-{
-	__asm mov eax, dword ptr [esp+4]
-	__asm mov edx, dword ptr [esp+8]
-
-	__asm fld  dword ptr [eax+0]
-	__asm fmul dword ptr [vright+0]
-	__asm fld  dword ptr [eax+0]
-	__asm fmul dword ptr [vup+0]
-	__asm fld  dword ptr [eax+0]
-	__asm fmul dword ptr [vpn+0]
-
-	__asm fld  dword ptr [eax+4]
-	__asm fmul dword ptr [vright+4]
-	__asm fld  dword ptr [eax+4]
-	__asm fmul dword ptr [vup+4]
-	__asm fld  dword ptr [eax+4]
-	__asm fmul dword ptr [vpn+4]
-
-	__asm fxch st(2)
-
-	__asm faddp st(5), st(0)
-	__asm faddp st(3), st(0)
-	__asm faddp st(1), st(0)
-
-	__asm fld  dword ptr [eax+8]
-	__asm fmul dword ptr [vright+8]
-	__asm fld  dword ptr [eax+8]
-	__asm fmul dword ptr [vup+8]
-	__asm fld  dword ptr [eax+8]
-	__asm fmul dword ptr [vpn+8]
-
-	__asm fxch st(2)
-
-	__asm faddp st(5), st(0)
-	__asm faddp st(3), st(0)
-	__asm faddp st(1), st(0)
-
-	__asm fstp dword ptr [edx+8]
-	__asm fstp dword ptr [edx+4]
-	__asm fstp dword ptr [edx+0]
-
-	__asm ret
-}
-
 #endif
-#endif
-
 
 /*
 ================
@@ -329,15 +269,14 @@ Called every time the vid structure or r_refdef changes.
 Guaranteed to be called before the first refresh
 ===============
 */
-void R_ViewChanged (vrect_t *vr)
+void R_ViewChanged (vrect_t *vr, float aspect)
 {
 	int		i;
+	float	screenAspect, pixelAspect;
 
 	r_refdef.vrect = *vr;
 
-	r_refdef.horizontalFieldOfView = 2*tan((float)r_newrefdef.fov_x/360*M_PI);;
-	verticalFieldOfView = 2*tan((float)r_newrefdef.fov_y/360*M_PI);
-
+	r_refdef.horizontalFieldOfView = 2*tan((float)r_newrefdef.fov_x/360*M_PI);
 	r_refdef.fvrectx = (float)r_refdef.vrect.x;
 	r_refdef.fvrectx_adj = (float)r_refdef.vrect.x - 0.5;
 	r_refdef.vrect_x_adj_shift20 = (r_refdef.vrect.x<<20) + (1<<19) - 1;
@@ -363,13 +302,29 @@ void R_ViewChanged (vrect_t *vr)
 
 	xOrigin = r_refdef.xOrigin;
 	yOrigin = r_refdef.yOrigin;
-	
-// values for perspective projection
-// if math were exact, the values would range from 0.5 to to range+0.5
-// hopefully they wll be in the 0.000001 to range+.999999 and truncate
-// the polygon rasterization will never render in the first row or column
-// but will definately render in the [range] row and column, so adjust the
-// buffer origin to get an exact edge to edge fill
+
+	// 320*200 1.0 pixelAspect = 1.6 screenAspect
+	// 320*240 1.0 pixelAspect = 1.3333 screenAspect
+	// proper 320*200 pixelAspect = 0.8333333
+	if (r_newrefdef.rdflags & RDF_FOVADAPT) /* fov_adapt in effect */
+	{
+		pixelAspect = 1;
+		verticalFieldOfView = 2.0 * tan (r_newrefdef.fov_y/360*M_PI);
+	}
+	else
+	{
+		pixelAspect = aspect;
+		screenAspect = r_refdef.vrect.width*pixelAspect / r_refdef.vrect.height;
+		verticalFieldOfView = r_refdef.horizontalFieldOfView / screenAspect;
+	}
+
+/* values for perspective projection
+   if math were exact, the values would range from 0.5 to to range+0.5
+   hopefully they wll be in the 0.000001 to range+.999999 and truncate
+   the polygon rasterization will never render in the first row or column
+   but will definately render in the [range] row and column, so adjust the
+   buffer origin to get an exact edge to edge fill
+*/
 	xcenter = ((float)r_refdef.vrect.width * XCENTERING) +
 			r_refdef.vrect.x - 0.5;
 	aliasxcenter = xcenter * r_aliasuvscale;
@@ -381,11 +336,13 @@ void R_ViewChanged (vrect_t *vr)
 	aliasxscale = xscale * r_aliasuvscale;
 	xscaleinv = 1.0 / xscale;
 
-	yscale = xscale;
+	yscale = (r_newrefdef.rdflags & RDF_FOVADAPT)?
+			  r_refdef.vrect.height / verticalFieldOfView :
+			  xscale * pixelAspect;
 	aliasyscale = yscale * r_aliasuvscale;
 	yscaleinv = 1.0 / yscale;
 	xscaleshrink = (r_refdef.vrect.width-6)/r_refdef.horizontalFieldOfView;
-	yscaleshrink = xscaleshrink;
+	yscaleshrink = xscaleshrink*pixelAspect;
 
 // left side clip
 	screenedge[0].normal[0] = -1.0 / (xOrigin*r_refdef.horizontalFieldOfView);
@@ -399,7 +356,7 @@ void R_ViewChanged (vrect_t *vr)
 	screenedge[1].normal[1] = 0;
 	screenedge[1].normal[2] = 1;
 	screenedge[1].type = PLANE_ANYZ;
-	
+
 // top side clip
 	screenedge[2].normal[0] = 0;
 	screenedge[2].normal[1] = -1.0 / (yOrigin*verticalFieldOfView);
@@ -427,6 +384,7 @@ R_SetupFrame
 void R_SetupFrame (void)
 {
 	int			i;
+	float			aspect;
 	vrect_t		vrect;
 
 	if (r_fullbright->modified)
@@ -456,13 +414,42 @@ void R_SetupFrame (void)
 	else
 		r_dowarp = false;
 
+	aspect = ((float)r_newrefdef.height/(float)r_newrefdef.width)*(320.0f/240.0f);
+
 	if (r_dowarp)
 	{	// warp into off screen buffer
-		vrect.x = 0;
-		vrect.y = 0;
-		vrect.width = r_newrefdef.width < WARP_WIDTH ? r_newrefdef.width : WARP_WIDTH;
-		vrect.height = r_newrefdef.height < WARP_HEIGHT ? r_newrefdef.height : WARP_HEIGHT;
+		if (r_newrefdef.width <= WARP_WIDTH && r_newrefdef.height <= WARP_HEIGHT)
+		{
+			/* shortcut for 320x240 and lower -- from Q1 */
+			vrect.x = 0;
+			vrect.y = 0;
+			vrect.width = r_newrefdef.width;
+			vrect.height = r_newrefdef.height;
+		}
+		else
+		{
+			/* the following adapted from Q1 */
+			float w = r_newrefdef.width;
+			float h = r_newrefdef.height;
 
+			if (w > WARP_WIDTH)
+			{
+				h *= (float)WARP_WIDTH / w;
+				w = WARP_WIDTH;
+			}
+			if (h > WARP_HEIGHT)
+			{
+				h = WARP_HEIGHT;
+				w *= (float)WARP_HEIGHT / h;
+			}
+
+			vrect.x = 0;
+			vrect.y = 0;
+			vrect.width = (int)w;
+			vrect.height = (int)h;
+			aspect *= (h / w);
+			aspect *= ((float)r_newrefdef.width / (float)r_newrefdef.height);
+		}
 		d_viewbuffer = r_warpbuffer;
 		r_screenwidth = WARP_WIDTH;
 	}
@@ -477,7 +464,7 @@ void R_SetupFrame (void)
 		r_screenwidth = vid.rowbytes;
 	}
 	
-	R_ViewChanged (&vrect);
+	R_ViewChanged (&vrect, aspect);
 
 // start off with just the four screen edge clip planes
 	R_TransformFrustum ();
@@ -513,21 +500,6 @@ void R_SetupFrame (void)
 
 	d_aflatcolor = 0;
 }
-
-
-#if	!id386
-
-/*
-================
-R_SurfacePatch
-================
-*/
-void R_SurfacePatch (void)
-{
-	// we only patch code on Intel
-}
-
-#endif	// !id386
 
 
 /* 
@@ -668,3 +640,64 @@ void R_ScreenShot_f (void)
 	ri.Con_Printf (PRINT_ALL, "Wrote %s\n", checkname);
 } 
 
+void D_SetParticleSize(void) // FS: Because particles like blood and bullet dust/spray/dunno the term look funny in high res
+{
+	if (sw_particle_size_override->intValue && sw_particle_size_min->intValue)
+	{
+		d_pix_min = sw_particle_size_min->intValue;
+	}
+	else
+	{
+		if(r_newrefdef.width >= 800)
+		{
+			d_pix_min = 2;
+		}
+		else if (r_newrefdef.width >= 640) // FS: Yeah, this seems weird, but honestly it looks way too big in 640x4XX
+		{
+			d_pix_min = 1;
+		}
+		else
+		{
+			d_pix_min = r_refdef.vrect.width / 320;
+		}
+	}
+
+	if (d_pix_min < 1)
+	{
+		d_pix_min = 1;
+	}
+
+	if (sw_particle_size_override->intValue && sw_particle_size_max->intValue)
+	{
+		d_pix_max = sw_particle_size_max->intValue;
+	}
+	else
+	{
+		d_pix_max = (int)((float)r_refdef.vrect.width / (320.0 / 4.0) + 0.5);
+	}
+
+	if (d_pix_max < 1)
+	{
+		d_pix_max = 1;
+	}
+
+	if (sw_particle_size_override->intValue && sw_particle_size->intValue)
+	{
+		d_pix_shift = sw_particle_size->intValue - (int)((float)r_refdef.vrect.width / 320.0 + 0.5);
+	}
+	else
+	{
+		if(r_newrefdef.width >= 800)
+		{
+			d_pix_shift = 16 - (int)((float)r_refdef.vrect.width / 320.0 + 0.5);
+		}
+		else if(r_newrefdef.width >= 640)
+		{
+			d_pix_shift = 12 - (int)((float)r_refdef.vrect.width / 320.0 + 0.5);
+		}
+		else
+		{
+			d_pix_shift = 8 - (int)((float)r_refdef.vrect.width / 320.0 + 0.5);
+		}
+	}
+}

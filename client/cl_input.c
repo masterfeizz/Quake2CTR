@@ -46,7 +46,7 @@ state bit 1 is edge triggered on the up to down transition
 state bit 2 is edge triggered on the down to up transition
 
 
-Key_Event (int key, qboolean down, unsigned time);
+Key_Event (int key, qboolean down, unsigned int time);
 
   +mlook src time
 
@@ -244,9 +244,9 @@ void CL_AdjustAngles (void)
 	float	up, down;
 	
 	if (in_speed.state & 1)
-		speed = cls.frametime * cl_anglespeedkey->value;
+		speed = cls.netFrameTime * cl_anglespeedkey->value;
 	else
-		speed = cls.frametime;
+		speed = cls.netFrameTime;
 
 	if (!(in_strafe.state & 1))
 	{
@@ -316,6 +316,12 @@ void CL_ClampPitch (void)
 	pitch = SHORT2ANGLE(cl.frame.playerstate.pmove.delta_angles[PITCH]);
 	if (pitch > 180)
 		pitch -= 360;
+
+	if (cl.viewangles[PITCH] + pitch < -360)
+		cl.viewangles[PITCH] += 360; // wrapped
+	if (cl.viewangles[PITCH] + pitch > 360)
+		cl.viewangles[PITCH] -= 360; // wrapped
+
 	if (cl.viewangles[PITCH] + pitch > 89)
 		cl.viewangles[PITCH] = 89 - pitch;
 	if (cl.viewangles[PITCH] + pitch < -89)
@@ -347,7 +353,7 @@ void CL_FinishMove (usercmd_t *cmd)
 		cmd->buttons |= BUTTON_ANY;
 
 	// send milliseconds of time to apply the move
-	ms = cls.frametime * 1000;
+	ms = cls.netFrameTime * 1000;
 	if (ms > 250)
 		ms = 100;		// time was unreasonable
 	cmd->msec = ms;
@@ -444,6 +450,230 @@ void CL_InitInput (void)
 }
 
 
+#ifdef CLIENT_SPLIT_NETFRAME
+/*
+=================
+CL_RefreshCmd
+
+jec - Adds any new input changes to usercmd
+that occurred since last Init or RefreshCmd.
+=================
+*/
+void CL_RefreshCmd (void)
+{	
+	int			ms;
+	usercmd_t	*cmd = &cl.cmds[ cls.netchan.outgoing_sequence & (CMD_BACKUP-1) ];
+
+	// get delta for this sample.
+	frame_msec = sys_frame_time - old_sys_frame_time;	
+
+	// bounds checking
+	if (frame_msec < 1)
+		return;
+	if (frame_msec > 200)
+		frame_msec = 200;
+
+	//cmd->forwardmove = cmd->sidemove = cmd->upmove = 0;
+
+	// Get basic movement from keyboard
+	CL_BaseMove (cmd);
+
+	// Allow mice or other external controllers to add to the move
+	IN_Move (cmd);
+
+	// Update cmd viewangles for CL_PredictMove
+	CL_ClampPitch ();
+
+	cmd->angles[0] = ANGLE2SHORT(cl.viewangles[0]);
+	cmd->angles[1] = ANGLE2SHORT(cl.viewangles[1]);
+	cmd->angles[2] = ANGLE2SHORT(cl.viewangles[2]);
+
+	// Update cmd->msec for CL_PredictMove
+	ms = (int)(cls.netFrameTime * 1000);
+	if (ms > 250)
+		ms = 100;
+
+	cmd->msec = ms;
+
+	// Update counter
+	old_sys_frame_time = sys_frame_time;
+
+
+	//7 = starting attack 1  2  4
+	//5 = during attack   1     4 
+	//4 = idle                  4
+
+	// Send packet immediately on important events
+	if (((in_attack.state & 2) || (in_use.state & 2)))
+		cls.forcePacket = true;
+}
+
+
+/*
+=================
+CL_RefreshMove
+
+Just updates movement, such as when disconnected.
+=================
+*/
+void CL_RefreshMove (void)
+{	
+	usercmd_t *cmd = &cl.cmds[ cls.netchan.outgoing_sequence & (CMD_BACKUP-1) ];
+
+	// get delta for this sample.
+	frame_msec = sys_frame_time - old_sys_frame_time;	
+
+	// bounds checking
+	if (frame_msec < 1)
+		return;
+	if (frame_msec > 200)
+		frame_msec = 200;
+
+	// Get basic movement from keyboard
+	CL_BaseMove (cmd);
+
+	// Allow mice or other external controllers to add to the move
+	IN_Move (cmd);
+
+	// Update counter
+	old_sys_frame_time = sys_frame_time;
+}
+
+
+/*
+=================
+CL_FinalizeCmd
+
+jec - Prepares usercmd for transmission,
+adds all changes that occurred since last Init.
+=================
+*/
+void CL_FinalizeCmd (void)
+{
+	usercmd_t *cmd = &cl.cmds[ cls.netchan.outgoing_sequence & (CMD_BACKUP-1) ];
+
+	// Set any button hits that occured since last frame
+	if (in_attack.state & 3)
+		cmd->buttons |= BUTTON_ATTACK;
+	in_attack.state &= ~2;
+
+	if (in_use.state & 3)
+		cmd->buttons |= BUTTON_USE;
+	in_use.state &= ~2;
+
+	if (anykeydown && cls.key_dest == key_game)
+		cmd->buttons |= BUTTON_ANY;
+
+	cmd->impulse = in_impulse;
+	in_impulse = 0;
+
+	// set the ambient light level at the player's current position
+	cmd->lightlevel = (byte)cl_lightlevel->value;
+}
+
+
+/*
+=================
+CL_SendCmd_Async
+=================
+*/
+void CL_SendCmd_Async (void)
+{
+	sizebuf_t	buf;
+	byte		data[128];
+	int			i;
+	usercmd_t	*cmd, *oldcmd;
+	usercmd_t	nullcmd;
+	int			checksumIndex;
+
+	// clear buffer
+	memset (&buf, 0, sizeof(buf));
+
+	// build a command even if not connected
+
+	// save this command off for prediction
+	i = cls.netchan.outgoing_sequence & (CMD_BACKUP-1);
+	cmd = &cl.cmds[i];
+	cl.cmd_time[i] = cls.realtime;	// for netgraph ping calculation
+
+	CL_FinalizeCmd ();
+
+	cl.cmd = *cmd;
+
+	if (cls.state == ca_disconnected || cls.state == ca_connecting)
+		return;
+
+	if (cls.state == ca_connected)
+	{
+		if (cls.netchan.message.cursize	|| curtime - cls.netchan.last_sent > 1000 )
+			Netchan_Transmit (&cls.netchan, 0, buf.data);	
+		return;
+	}
+
+	// send a userinfo update if needed
+	if (userinfo_modified)
+	{
+		CL_FixUpGender ();
+		userinfo_modified = false;
+		MSG_WriteByte (&cls.netchan.message, clc_userinfo);
+		MSG_WriteString (&cls.netchan.message, Cvar_Userinfo() );
+	}
+
+	SZ_Init (&buf, data, sizeof(data));
+
+	if (cmd->buttons && cl.cinematictime > 0 && !cl.attractloop 
+		&& cls.realtime - cl.cinematictime > 1000)
+	{	// skip the rest of the cinematic
+		SCR_FinishCinematic ();
+	}
+
+	// begin a client move command
+	MSG_WriteByte (&buf, clc_move);
+
+	// save the position for a checksum byte
+	checksumIndex = buf.cursize;
+	MSG_WriteByte (&buf, 0);
+
+	// let the server know what the last frame we
+	// got was, so the next message can be delta compressed
+	if (cl_nodelta->value || !cl.frame.valid || cls.demowaiting)
+		MSG_WriteLong (&buf, -1);	// no compression
+	else
+		MSG_WriteLong (&buf, cl.frame.serverframe);
+
+	// send this and the previous cmds in the message, so
+	// if the last packet was dropped, it can be recovered
+	i = (cls.netchan.outgoing_sequence-2) & (CMD_BACKUP-1);
+	cmd = &cl.cmds[i];
+	memset (&nullcmd, 0, sizeof(nullcmd));
+	MSG_WriteDeltaUsercmd (&buf, &nullcmd, cmd);
+	oldcmd = cmd;
+
+	i = (cls.netchan.outgoing_sequence-1) & (CMD_BACKUP-1);
+	cmd = &cl.cmds[i];
+	MSG_WriteDeltaUsercmd (&buf, oldcmd, cmd);
+	oldcmd = cmd;
+
+	i = (cls.netchan.outgoing_sequence) & (CMD_BACKUP-1);
+	cmd = &cl.cmds[i];
+	MSG_WriteDeltaUsercmd (&buf, oldcmd, cmd);
+
+	// calculate a checksum over the move commands
+	buf.data[checksumIndex] = COM_BlockSequenceCRCByte(
+		buf.data + checksumIndex + 1, buf.cursize - checksumIndex - 1,
+		cls.netchan.outgoing_sequence);
+
+	//
+	// deliver the message
+	//
+	Netchan_Transmit (&cls.netchan, buf.cursize, buf.data);
+
+	// Init the current cmd buffer and clear it
+	cmd = &cl.cmds[ cls.netchan.outgoing_sequence & (CMD_BACKUP-1) ];
+	memset(cmd, 0, sizeof(*cmd));
+}
+#endif
+
 
 /*
 =================
@@ -458,6 +688,9 @@ void CL_SendCmd (void)
 	usercmd_t	*cmd, *oldcmd;
 	usercmd_t	nullcmd;
 	int			checksumIndex;
+
+	// Knightmare- clear buffer
+	memset (&buf, 0, sizeof(buf));
 
 	// build a command even if not connected
 

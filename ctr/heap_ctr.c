@@ -1,44 +1,68 @@
-#include <3ds/types.h>
 #include <3ds/svc.h>
+#include <3ds/allocator/mappable.h>
 #include <3ds/env.h>
 #include <3ds/os.h>
+#include <3ds/result.h>
 
-#define APPMEMTYPE (*(u32*)0x1FF80030)
+#define LINEAR_HEAP_SIZE_CAP (24 << 20) // 24MB
 
 extern char* fake_heap_start;
 extern char* fake_heap_end;
-
-int __stacksize__ = 4 * 1024 * 1024;
 
 u32 __ctru_heap;
 u32 __ctru_linear_heap;
 
 u32 __ctru_heap_size        = 0;
-u32 __ctru_linear_heap_size = 32*1024*1024;
+u32 __ctru_linear_heap_size = 0;
 
-void __system_allocateHeaps(void) {
+void __system_allocateHeaps(void)
+{
+	Result rc;
 
-    u32 tmp=0;
+	// Retrieve handle to the resource limit object for our process
+	Handle reslimit = 0;
+	rc = svcGetResourceLimit(&reslimit, CUR_PROCESS_HANDLE);
+	if (R_FAILED(rc))
+		svcBreak(USERBREAK_PANIC);
 
-     __ctru_linear_heap_size = APPMEMTYPE > 5 ? 32*1024*1024 : 12*1024*1024;
+	// Retrieve information about total/used memory
+	s64 maxCommit = 0, currentCommit = 0;
+	ResourceLimitType reslimitType = RESLIMIT_COMMIT;
+	svcGetResourceLimitLimitValues(&maxCommit, reslimit, &reslimitType, 1); // for APPLICATION this is equal to APPMEMALLOC at all times
+	svcGetResourceLimitCurrentValues(&currentCommit, reslimit, &reslimitType, 1);
+	svcCloseHandle(reslimit);
 
-    if (!__ctru_heap_size) {
-        // Automatically allocate all remaining free memory, aligning to page size.
-        __ctru_heap_size = osGetMemRegionFree(MEMREGION_APPLICATION) &~ 0xFFF;
-        if (__ctru_heap_size <= __ctru_linear_heap_size)
-            svcBreak(USERBREAK_PANIC);
-        __ctru_heap_size -= __ctru_linear_heap_size;
-    }
+	// Calculate how much remaining free memory is available
+	u32 remaining = (u32)(maxCommit - currentCommit) &~ 0xFFF;
 
-    // Allocate the application heap
-    __ctru_heap = 0x08000000;
-    svcControlMemory(&tmp, __ctru_heap, 0x0, __ctru_heap_size, MEMOP_ALLOC, MEMPERM_READ | MEMPERM_WRITE);
+	if (__ctru_heap_size + __ctru_linear_heap_size > remaining)
+		svcBreak(USERBREAK_PANIC);
 
-    // Allocate the linear heap
-    svcControlMemory(&__ctru_linear_heap, 0x0, 0x0, __ctru_linear_heap_size, MEMOP_ALLOC_LINEAR, MEMPERM_READ | MEMPERM_WRITE);
+	// Divide available memory between linear and application heaps (with rounding in favor of the latter)
+	__ctru_linear_heap_size = (remaining / 6) & ~0xFFF;
+	__ctru_heap_size = remaining - __ctru_linear_heap_size;
 
-    // Set up newlib heap
-    fake_heap_start = (char*)__ctru_heap;
-    fake_heap_end = fake_heap_start + __ctru_heap_size;
+	// If the linear heap size is bigger than the cap, grow application heap
+	if (__ctru_linear_heap_size > LINEAR_HEAP_SIZE_CAP) {
+		__ctru_linear_heap_size = LINEAR_HEAP_SIZE_CAP;
+		__ctru_heap_size = remaining - __ctru_linear_heap_size;
+	}
+
+	// Allocate the application heap
+	rc = svcControlMemory(&__ctru_heap, OS_HEAP_AREA_BEGIN, 0x0, __ctru_heap_size, MEMOP_ALLOC, MEMPERM_READ | MEMPERM_WRITE);
+	if (R_FAILED(rc))
+		svcBreak(USERBREAK_PANIC);
+
+	// Allocate the linear heap
+	rc = svcControlMemory(&__ctru_linear_heap, 0x0, 0x0, __ctru_linear_heap_size, MEMOP_ALLOC_LINEAR, MEMPERM_READ | MEMPERM_WRITE);
+	if (R_FAILED(rc))
+		svcBreak(USERBREAK_PANIC);
+
+	// Mappable allocator init
+	mappableInit(OS_MAP_AREA_BEGIN, OS_MAP_AREA_END);
+
+	// Set up newlib heap
+	fake_heap_start = (char*)__ctru_heap;
+	fake_heap_end = fake_heap_start + __ctru_heap_size;
 
 }

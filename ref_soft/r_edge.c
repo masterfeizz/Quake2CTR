@@ -21,7 +21,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "r_local.h"
 
-#ifndef id386
+#if !id386
 void R_SurfacePatch (void)
 {
 }
@@ -84,7 +84,6 @@ extern void			R_RotateBmodel (void);
 extern void			R_TransformFrustum (void);
 
 
-
 void R_GenerateSpans (void);
 void R_GenerateSpansBackward (void);
 
@@ -119,7 +118,7 @@ void R_BeginEdgeFrame (void)
 	surfaces[1].flags = SURF_DRAWBACKGROUND;
 
 // put the background behind everything in the world
-	if (sw_draworder->value)
+	if (sw_draworder->intValue)
 	{
 		pdrawfunc = R_GenerateSpansBackward;
 		surfaces[1].key = 0;
@@ -640,7 +639,7 @@ void R_ScanEdges (void)
 	surf_t	*s;
 
 	basespan_p = (espan_t *)
-			((long)(basespans + CACHE_SIZE - 1) & ~(CACHE_SIZE - 1));
+			((intptr_t)(basespans + CACHE_SIZE - 1) & ~(CACHE_SIZE - 1));
 	max_span_p = &basespan_p[MAXSPANS - r_refdef.vrect.width];
 
 	span_p = basespan_p;
@@ -669,7 +668,8 @@ void R_ScanEdges (void)
 	edge_aftertail.prev = &edge_tail;
 
 // FIXME: do we need this now that we clamp x in r_draw.c?
-	edge_sentinel.u = 2000 << 24;		// make sure nothing sorts past this
+//	edge_sentinel.u = 2000 << 24;		// make sure nothing sorts past this
+	edge_sentinel.u = 32767 << 16;		// FS: Sezero - integer shift overflow fix
 	edge_sentinel.prev = &edge_aftertail;
 
 //	
@@ -800,13 +800,13 @@ D_CalcGradients
 */
 void D_CalcGradients (msurface_t *pface)
 {
-	mplane_t	*pplane;
+//	mplane_t	*pplane; // FS: Unused
 	float		mipscale;
 	vec3_t		p_temp1;
 	vec3_t		p_saxis, p_taxis;
 	float		t;
 
-	pplane = pface->plane;
+//	pplane = pface->plane;
 
 	mipscale = 1.0 / (float)(1 << miplevel);
 
@@ -1074,7 +1074,7 @@ void D_DrawflatSurfaces (void)
 
 		// make a stable color for each surface by taking the low
 		// bits of the msurface pointer
-		D_FlatFillSurface (s, (int)s->msurf & 0xFF);
+		D_FlatFillSurface (s, (int)((intptr_t) s->msurf) & 0xFF);
 		D_DrawZSpans (s->spans);
 	}
 }
@@ -1096,7 +1096,7 @@ void D_DrawSurfaces (void)
 	TransformVector (modelorg, transformed_modelorg);
 	VectorCopy (transformed_modelorg, world_transformed_modelorg);
 
-	if (!sw_drawflat->value)
+	if (!sw_drawflat->intValue)
 	{
 		for (s = &surfaces[1] ; s<surface_p ; s++)
 		{

@@ -616,7 +616,7 @@ R_RenderWorld
 void R_RenderWorld (void)
 {
 
-	if (!r_drawworld->value)
+	if (!r_drawworld->intValue)
 		return;
 	if ( r_newrefdef.rdflags & RDF_NOWORLDMODEL )
 		return;

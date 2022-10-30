@@ -20,10 +20,12 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 // qcommon.h -- definitions common between client and server, but not game.dll
 
+#ifndef _QCOMMON_H
+#define _QCOMMON_H
+
 #include "../game/q_shared.h"
 
-
-#define	VERSION		3.19
+#define	VERSION		3.24
 
 #define	BASEDIRNAME	"baseq2"
 
@@ -35,7 +37,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define BUILDSTRING "Win32 DEBUG"
 #endif
 
-#ifdef _M_IX86
+#if defined(_WIN64)
+#define	CPUSTRING	"x64"
+#elif defined(_M_IX86) || defined(__i386__)
 #define	CPUSTRING	"x86"
 #elif defined _M_ALPHA
 #define	CPUSTRING	"AXP"
@@ -65,9 +69,22 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #else	// !WIN32
 
+#ifdef __DJGPP__
+#define BUILDSTRING "MS-DOS/DJGPP"
+#define	CPUSTRING	"i386"
+#else
 #define BUILDSTRING "NON-WIN32"
 #define	CPUSTRING	"NON-WIN32"
+#endif
 
+#endif
+
+// Knightmare added
+#ifndef min
+#define min(a,b)        (((a) < (b)) ? (a) : (b))
+#endif
+#ifndef max
+#define max(a,b)        (((a) > (b)) ? (a) : (b))
 #endif
 
 //============================================================================
@@ -152,6 +169,9 @@ void COM_Init (void);
 void COM_InitArgv (int argc, char **argv);
 
 char *CopyString (char *in);
+
+void StripHighBits (char *string, int highbits);
+void ExpandNewLines (char *string);
 
 //============================================================================
 
@@ -402,6 +422,7 @@ then searches for a command or variable that matches the first token.
 typedef void (*xcommand_t) (void);
 
 void	Cmd_Init (void);
+void	Cmd_Shutdown(void);
 
 void	Cmd_AddCommand (char *cmd_name, xcommand_t function);
 // called by the init functions of other parts of the program to
@@ -417,6 +438,8 @@ qboolean Cmd_Exists (char *cmd_name);
 char 	*Cmd_CompleteCommand (char *partial);
 // attempts to match a partial command for automatic command line completion
 // returns NULL if nothing fits
+
+void Cmd_RemoveAutoComplete (void); /* FS */
 
 int		Cmd_Argc (void);
 char	*Cmd_Argv (int arg);
@@ -481,6 +504,8 @@ void	Cvar_SetValue (char *var_name, float value);
 float	Cvar_VariableValue (char *var_name);
 // returns 0 if not defined or non numeric
 
+int		Cvar_VariableValueInt (char *var_name); /* FS */
+
 char	*Cvar_VariableString (char *var_name);
 // returns an empty string if not defined
 
@@ -501,12 +526,16 @@ void 	Cvar_WriteVariables (char *path);
 // with the archive flag set to true.
 
 void	Cvar_Init (void);
+void	Cvar_Shutdown(void);
 
 char	*Cvar_Userinfo (void);
 // returns an info string containing all the CVAR_USERINFO cvars
 
 char	*Cvar_Serverinfo (void);
 // returns an info string containing all the CVAR_SERVERINFO cvars
+
+void	Cvar_SetDescription (char *var_name, const char *description);
+/* FS: Set descriptions for CVARs */
 
 extern	qboolean	userinfo_modified;
 // this is set each time a CVAR_USERINFO variable is changed
@@ -524,7 +553,8 @@ NET
 
 #define	PORT_ANY	-1
 
-#define	MAX_MSGLEN		1400		// max length of a message
+#define	MAX_MSGLEN		32000		// max length of a message
+#define MAX_MSGLEN_MP	1400		/* FS: For sending configstrings and baselines.  Much faster start-ups */
 #define	PACKET_HEADER	10			// two ints and a short
 
 typedef enum {NA_LOOPBACK, NA_BROADCAST, NA_IP, NA_IPX, NA_BROADCAST_IPX} netadrtype_t;
@@ -607,7 +637,7 @@ void Netchan_Setup (netsrc_t sock, netchan_t *chan, netadr_t adr, int qport);
 qboolean Netchan_NeedReliable (netchan_t *chan);
 void Netchan_Transmit (netchan_t *chan, int length, byte *data);
 void Netchan_OutOfBand (int net_socket, netadr_t adr, int length, byte *data);
-void Netchan_OutOfBandPrint (int net_socket, netadr_t adr, char *format, ...);
+void Netchan_OutOfBandPrint (int net_socket, netadr_t adr, char *format, ...) __attribute__((__format__(__printf__,3,4)));
 qboolean Netchan_Process (netchan_t *chan, sizebuf_t *msg);
 
 qboolean Netchan_CanReliable (netchan_t *chan);
@@ -691,6 +721,12 @@ FILESYSTEM
 
 ==============================================================
 */
+// Knightmare added
+typedef enum {
+	FS_SEEK_CUR,
+	FS_SEEK_SET,
+	FS_SEEK_END
+} fsOrigin_t;
 
 void	FS_InitFilesystem (void);
 void	FS_SetGamedir (char *dir);
@@ -713,6 +749,18 @@ void	FS_FreeFile (void *buffer);
 
 void	FS_CreatePath (char *path);
 
+// Knightmare added
+int			FS_FRead (void *buffer, int size, int count, FILE *f);
+int			FS_Seek (FILE *f, int offset, fsOrigin_t origin);
+long		FS_Tell (FILE *f);
+char		**FS_ListPak (char *find, int *num);
+char		**FS_ListFiles (char *findname, int *numfiles, unsigned musthave, unsigned canthave);
+void		FS_FreeFileList (char **list, int n);
+qboolean	FS_ItemInList (char *check, int num, char **list);
+void		FS_InsertInList (char **list, char *insert, int len, int start);
+void		FS_AddPAKFile (const char *packPath);
+qboolean	FS_LocalFileExists (char *path);
+// end Knightmare
 
 /*
 ==============================================================
@@ -736,10 +784,10 @@ MISC
 
 void		Com_BeginRedirect (int target, char *buffer, int buffersize, void (*flush));
 void		Com_EndRedirect (void);
-void 		Com_Printf (char *fmt, ...);
-void 		Com_DPrintf (char *fmt, ...);
-void 		Com_Error (int code, char *fmt, ...);
-void 		Com_Quit (void);
+void 		Com_Printf (char *fmt, ...) __attribute__((__format__(__printf__,1,2)));
+void 		Com_DPrintf (unsigned int developerFlags, char *fmt, ...) __attribute__((__format__(__printf__,2,3))); /* FS: Added developer flags */
+void 		Com_Error (int code, char *fmt, ...) __attribute__((__noreturn__, __format__(__printf__,2,3)));
+void 		Com_Quit (void) __attribute__((__noreturn__));
 
 int			Com_ServerState (void);		// this should have just been a cvar...
 void		Com_SetServerState (int state);
@@ -754,6 +802,11 @@ extern	cvar_t	*developer;
 extern	cvar_t	*dedicated;
 extern	cvar_t	*host_speeds;
 extern	cvar_t	*log_stats;
+extern	cvar_t	*cfg_default; /* FS: New default config stuff so we can keep some sanity between DOS and Win32 */
+
+// Knightmare added
+extern	cvar_t *fs_gamedirvar;
+extern	cvar_t *fs_basedir;
 
 extern	FILE *log_stats_file;
 
@@ -769,6 +822,7 @@ void *Z_TagMalloc (int size, int tag);
 void Z_FreeTags (int tag);
 
 void Qcommon_Init (int argc, char **argv);
+
 void Qcommon_Frame (int msec);
 void Qcommon_Shutdown (void);
 
@@ -798,10 +852,19 @@ void	*Sys_GetGameAPI (void *parms);
 char	*Sys_ConsoleInput (void);
 void	Sys_ConsoleOutput (char *string);
 void	Sys_SendKeyEvents (void);
-void	Sys_Error (char *error, ...);
-void	Sys_Quit (void);
+void	Sys_Error (char *error, ...) __attribute__((__noreturn__, __format__(__printf__,1,2)));
+void	Sys_Quit (void) __attribute__((__noreturn__));
 char	*Sys_GetClipboardData( void );
 void	Sys_CopyProtect (void);
+
+void	Sys_Sleep (unsigned msec);	// Knightmare added
+
+#ifdef __DJGPP__
+void Sys_InitDXE3 (void);
+void *Sys_dlopen (const char *filename, qboolean globalmode);
+void *Sys_dlsym (void *handle, const char *symbol);
+int Sys_dlclose (void *handle);
+#endif
 
 /*
 ==============================================================
@@ -823,4 +886,16 @@ void SV_Shutdown (char *finalmsg, qboolean reconnect);
 void SV_Frame (int msec);
 
 
+qboolean IsValidChar (int c); /* FS: From KMQ2 */
 
+/* FS: DOS shit */
+#define MAX_NUM_ARGVS	50
+
+extern	int		com_argc;
+extern	char	*com_argv[MAX_NUM_ARGVS+1];
+int Q_tolower(int c);
+int Q_toupper(int c);
+
+const char *MakePrintable (const void *subject, size_t numchars); /* FS: From R1Q2 */
+
+#endif // _QCOMMON_H

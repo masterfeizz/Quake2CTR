@@ -224,14 +224,14 @@ R_LightPoint
 void R_LightPoint (vec3_t p, vec3_t color)
 {
 	vec3_t		end;
-	float		r;
+	int			r;
 	int			lnum;
 	dlight_t	*dl;
-	float		light;
+//	float		light; // FS: Unused
 	vec3_t		dist;
 	float		add;
 	
-	if (!r_worldmodel->lightdata)
+	if (!r_worldmodel->lightdata || !currententity)
 	{
 		color[0] = color[1] = color[2] = 1.0;
 		return;
@@ -255,7 +255,7 @@ void R_LightPoint (vec3_t p, vec3_t color)
 	//
 	// add dynamic lights
 	//
-	light = 0;
+//	light = 0;
 	for (lnum=0 ; lnum<r_newrefdef.num_dlights ; lnum++)
 	{
 		dl = &r_newrefdef.dlights[lnum];

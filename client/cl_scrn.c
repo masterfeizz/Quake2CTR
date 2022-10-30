@@ -32,6 +32,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
   */
 
+#include <time.h> /* FS: For cl_drawtime */
 #include "client.h"
 
 float		scr_con_current;	// aproaches scr_conlines at scr_conspeed
@@ -59,6 +60,13 @@ cvar_t		*scr_graphscale;
 cvar_t		*scr_graphshift;
 cvar_t		*scr_drawall;
 
+ /* FS: cl_draw* friends */
+cvar_t		*cl_drawfps;	// Knightmare
+cvar_t		*cl_drawtime;
+cvar_t		*cl_drawuptime;
+cvar_t		*cl_drawaltcolours;
+cvar_t		*cl_hide_gun_icon;
+
 typedef struct
 {
 	int		x1, y1, x2, y2;
@@ -69,9 +77,170 @@ dirty_t		scr_dirty, scr_old_dirty[2];
 char		crosshair_pic[MAX_QPATH];
 int			crosshair_width, crosshair_height;
 
+// Knightmare- moved these here
+#define STAT_MINUS		10	// num frame for '-' stats digit
+char		*sb_nums[2][11] = 
+{
+	{"num_0", "num_1", "num_2", "num_3", "num_4", "num_5",
+	"num_6", "num_7", "num_8", "num_9", "num_minus"},
+	{"anum_0", "anum_1", "anum_2", "anum_3", "anum_4", "anum_5",
+	"anum_6", "anum_7", "anum_8", "anum_9", "anum_minus"}
+};
+
+#define	ICON_WIDTH	24
+#define	ICON_HEIGHT	24
+#define	CHAR_WIDTH	16
+#define	ICON_SPACE	8
+// end Knightmare
+
 void SCR_TimeRefresh_f (void);
 void SCR_Loading_f (void);
 
+static void SCR_DrawUptime (void) /* FS: Connection time */
+{
+	char	str[80];
+	int	minutes, seconds, tens, units;
+	int	x, y;
+
+	if ((cls.state != ca_active) || !(cl_drawuptime->intValue))
+	{
+		return;
+	}
+
+	SCR_DirtyScreen(); // repaint everything next frame
+
+	// time
+	if (cl_drawuptime->intValue == 1) /* FS: Map time or total time playing quake time */
+	{
+		minutes = (cl.frame.serverframe/10) / 60;
+	}
+	else
+	{
+		minutes = (Sys_Milliseconds()/1000) / 60;
+	}
+
+	if (cl_drawuptime->intValue == 1)
+	{
+		seconds = (cl.frame.serverframe/10) - 60*minutes;
+	}
+	else
+	{
+		seconds = (Sys_Milliseconds()/1000) - 60*minutes;
+	}
+
+	tens = seconds / 10;
+	units = seconds - 10*tens;
+	Com_sprintf (str, sizeof(str), "%3i:%i%i", minutes, tens, units);
+	x = viddef.width - strlen(str) * 8;
+	y = viddef.height - 50;
+
+	if(cl_drawaltcolours->intValue) /* FS: Personally, I like the green.  But other people might not like it. */
+	{
+		DrawAltString(x, y, str);
+	}
+	else
+	{
+		DrawString(x, y, str);
+	}
+}
+
+static void SCR_DrawTime (void) /* FS: Draw current time */
+{
+	int	x, y;
+	struct tm	*local;
+	time_t	utc;
+	const char *timefmt;
+	char	st[80];
+
+	if (cls.state != ca_active || cl_drawtime->intValue <= 0)
+		return;
+
+	SCR_DirtyScreen(); // repaint everything next frame
+
+	utc = time (NULL);
+	local = localtime (&utc);
+
+	if (cl_drawtime->intValue == 1)
+		timefmt = "%H:%M:%S %p";
+	else	timefmt = "%I:%M:%S %p";
+
+	strftime (st, sizeof (st), timefmt, local);
+
+	x = viddef.width - strlen(st) * 8;
+	y = viddef.height - 42;
+	if(cl_drawaltcolours->intValue) /* FS: Personally, I like the green.  But other people might not like it. */
+	{
+		DrawAltString(x, y, st);
+	}
+	else
+	{
+		DrawString(x, y, st);
+	}
+}
+
+/*
+================
+SCR_ShowFPS
+FPS counter, code combined from BramBo and Q2E
+================
+*/
+#define FPS_FRAMES		4
+static void SCR_ShowFPS (void)
+{
+	static int	previousTimes[FPS_FRAMES];
+	static int	previousTime, index, fpscounter;
+	static char	fpsText[32];
+	int			i, time, total, fps, x, y;
+
+	if ((cls.state != ca_active) || !(cl_drawfps->value))
+	{
+		return;
+	}
+
+	if ((cl.time + 1000) < fpscounter)
+	{
+		fpscounter = cl.time + 100;
+	}
+
+	SCR_DirtyScreen(); // repaint everything next frame
+
+	time = Sys_Milliseconds();
+	previousTimes[index % FPS_FRAMES] = time - previousTime;
+	previousTime = time;
+	index++;
+
+	if (index <= FPS_FRAMES)
+	{
+		return;
+	}
+
+	// Average multiple frames together to smooth changes out a bit
+	total = 0;
+	for (i = 0; i < FPS_FRAMES; i++)
+	{
+		total += previousTimes[i];
+	}
+	total = max (total, 1);
+	fps = 1000 * FPS_FRAMES / total;
+
+	if (cl.time > fpscounter)
+	{
+		Com_sprintf(fpsText, sizeof(fpsText), "%3ifps", fps);
+		fpscounter = cl.time + 100;
+	}
+
+	x = (viddef.width - strlen(fpsText)*8);
+	y = (viddef.height - 33);
+
+	if(cl_drawaltcolours->intValue) /* FS: Personally, I like the green.  But other people might not like it. */
+	{
+		DrawAltString(x, y, fpsText);
+	}
+	else
+	{
+		DrawString(x, y, fpsText);
+	}
+}
 
 /*
 ===============================================================================
@@ -296,7 +465,7 @@ void SCR_DrawCenterString (void)
 
 void SCR_CheckDrawCenterString (void)
 {
-	scr_centertime_off -= cls.frametime;
+	scr_centertime_off -= cls.renderFrameTime;
 	
 	if (scr_centertime_off <= 0)
 		return;
@@ -421,6 +590,18 @@ void SCR_Init (void)
 	scr_graphshift = Cvar_Get ("graphshift", "0", 0);
 	scr_drawall = Cvar_Get ("scr_drawall", "0", 0);
 
+	 /* FS: cl_draw* friends */
+	cl_drawfps = Cvar_Get ("cl_drawfps", "0", CVAR_ARCHIVE);	// Knightmare
+	Cvar_SetDescription("cl_drawfps", "Draw FPS counter on the screen.");
+	cl_drawtime = Cvar_Get ("cl_drawtime", "0", CVAR_ARCHIVE);
+	Cvar_SetDescription("cl_drawtime", "Draw current time on the screen.  1 -  Military time.  2 - AM/PM.");
+	cl_drawuptime = Cvar_Get ("cl_drawuptime", "0", CVAR_ARCHIVE);
+	Cvar_SetDescription("cl_drawuptime", "Draw current uptime on the screen.  1 - Current level time.  2 - Total uptime of Quake 2.");
+	cl_drawaltcolours = Cvar_Get ("cl_drawaltcolours", "0", CVAR_ARCHIVE);
+	Cvar_SetDescription("cl_drawaltcolours", "Draw green text instead of white for the cl_draw*** cvars.");
+	cl_hide_gun_icon = Cvar_Get ("cl_hide_gun_icon", "0", CVAR_ARCHIVE);
+	Cvar_SetDescription("cl_hide_gun_icon", "Hide the gun/help computer icon.");
+
 //
 // register our commands
 //
@@ -457,10 +638,10 @@ void SCR_DrawPause (void)
 {
 	int		w, h;
 
-	if (!scr_showpause->value)		// turn off for screenshots
+	if (!scr_showpause->intValue)		// turn off for screenshots
 		return;
 
-	if (!cl_paused->value)
+	if (!cl_paused->intValue)
 		return;
 
 	re.DrawGetPicSize (&w, &h, "pause");
@@ -495,7 +676,14 @@ Scroll it up or down
 */
 void SCR_RunConsole (void)
 {
-// decide on the height of the console
+	/* src_conspeed must be a positive integer,
+	   otherwise things go wrong. Clamp it. */
+	if (scr_conspeed->value < 0.1f)
+	{
+		Cvar_Set("scr_conspeed", "0.1");
+	}
+
+	// decide on the height of the console
 	if (cls.key_dest == key_console)
 		scr_conlines = 0.5;		// half screen
 	else
@@ -503,14 +691,14 @@ void SCR_RunConsole (void)
 	
 	if (scr_conlines < scr_con_current)
 	{
-		scr_con_current -= scr_conspeed->value*cls.frametime;
+		scr_con_current -= scr_conspeed->value*(float)cls.renderFrameTime;
 		if (scr_conlines > scr_con_current)
 			scr_con_current = scr_conlines;
 
 	}
 	else if (scr_conlines > scr_con_current)
 	{
-		scr_con_current += scr_conspeed->value*cls.frametime;
+		scr_con_current += scr_conspeed->value*(float)cls.renderFrameTime;
 		if (scr_conlines < scr_con_current)
 			scr_con_current = scr_conlines;
 	}
@@ -564,7 +752,7 @@ void SCR_BeginLoadingPlaque (void)
 	CDAudio_Stop ();
 	if (cls.disable_screen)
 		return;
-	if (developer->value)
+	if (developer->intValue)
 		return;
 	if (cls.state == ca_disconnected)
 		return;	// if at console, don't bring up the plaque
@@ -613,11 +801,11 @@ int entitycmpfnc( const entity_t *a, const entity_t *b )
 	*/
 	if ( a->model == b->model )
 	{
-		return ( ( int ) a->skin - ( int ) b->skin );
+		return ( ( intptr_t ) a->skin - ( intptr_t ) b->skin );
 	}
 	else
 	{
-		return ( ( int ) a->model - ( int ) b->model );
+		return ( ( intptr_t ) a->model - ( intptr_t ) b->model );
 	}
 }
 
@@ -695,12 +883,12 @@ void SCR_TileClear (void)
 	int		top, bottom, left, right;
 	dirty_t	clear;
 
-	if (scr_drawall->value)
+	if (scr_drawall->intValue)
 		SCR_DirtyScreen ();	// for power vr or broken page flippers...
 
 	if (scr_con_current == 1.0)
 		return;		// full screen console
-	if (scr_viewsize->value == 100)
+	if (scr_viewsize->intValue == 100)
 		return;		// full screen rendering
 	if (cl.cinematictime > 0)
 		return;		// full screen cinematic
@@ -776,19 +964,7 @@ void SCR_TileClear (void)
 //===============================================================
 
 
-#define STAT_MINUS		10	// num frame for '-' stats digit
-char		*sb_nums[2][11] = 
-{
-	{"num_0", "num_1", "num_2", "num_3", "num_4", "num_5",
-	"num_6", "num_7", "num_8", "num_9", "num_minus"},
-	{"anum_0", "anum_1", "anum_2", "anum_3", "anum_4", "anum_5",
-	"anum_6", "anum_7", "anum_8", "anum_9", "anum_minus"}
-};
 
-#define	ICON_WIDTH	24
-#define	ICON_HEIGHT	24
-#define	CHAR_WIDTH	16
-#define	ICON_SPACE	8
 
 
 
@@ -921,12 +1097,12 @@ void SCR_TouchPics (void)
 		for (j=0 ; j<11 ; j++)
 			re.RegisterPic (sb_nums[i][j]);
 
-	if (crosshair->value)
+	if (crosshair->intValue)
 	{
-		if (crosshair->value > 3 || crosshair->value < 0)
+		if (crosshair->intValue > 3 || crosshair->intValue < 0)
 			crosshair->value = 3;
 
-		Com_sprintf (crosshair_pic, sizeof(crosshair_pic), "ch%i", (int)(crosshair->value));
+		Com_sprintf (crosshair_pic, sizeof(crosshair_pic), "ch%i", crosshair->intValue);
 		re.DrawGetPicSize (&crosshair_width, &crosshair_height, crosshair_pic);
 		if (!crosshair_width)
 			crosshair_pic[0] = 0;
@@ -975,7 +1151,18 @@ void SCR_ExecuteLayoutString (char *s)
 		}
 		if (!strcmp(token, "xv"))
 		{
-			token = COM_Parse (&s);
+			token = COM_Parse (&s); /* FS: x value */
+
+			if(cl_hide_gun_icon->intValue) /* FS: Hide the gun/help computer icon.  I always find it to be kind of pointless. */
+			{
+				if(!strcmp(token, "148"))
+				{
+					token = COM_Parse(&s); /* FS: "pic" */
+					token = COM_Parse(&s); /* FS: pic number */
+					continue;
+				}
+			}
+
 			x = viddef.width/2 - 160 + atoi(token);
 			continue;
 		}
@@ -1212,7 +1399,7 @@ void SCR_ExecuteLayoutString (char *s)
 			value = cl.frame.playerstate.stats[atoi(token)];
 			if (!value)
 			{	// skip to endif
-				while (s && strcmp(token, "endif") )
+				while (s && strcmp(token, "endif") != 0 )
 				{
 					token = COM_Parse (&s);
 				}
@@ -1295,7 +1482,7 @@ void SCR_UpdateScreen (void)
 	else if ( cl_stereo_separation->value < 0 )
 		Cvar_SetValue( "cl_stereo_separation", 0.0 );
 
-	if ( cl_stereo->value )
+	if ( cl_stereo->intValue)
 	{
 		numframes = 2;
 		separation[0] = -cl_stereo_separation->value / 2;
@@ -1334,6 +1521,7 @@ void SCR_UpdateScreen (void)
 					re.CinematicSetPalette(NULL);
 					cl.cinematicpalette_active = false;
 				}
+				SCR_DrawConsole ();
 				M_Draw ();
 //				re.EndFrame();
 //				return;
@@ -1383,15 +1571,20 @@ void SCR_UpdateScreen (void)
 			SCR_DrawNet ();
 			SCR_CheckDrawCenterString ();
 
-			if (scr_timegraph->value)
-				SCR_DebugGraph (cls.frametime*300, 0);
+			if (scr_timegraph->intValue)
+				SCR_DebugGraph (cls.renderFrameTime*300, 0);
 
-			if (scr_debuggraph->value || scr_timegraph->value || scr_netgraph->value)
+			if (scr_debuggraph->intValue || scr_timegraph->intValue || scr_netgraph->intValue)
 				SCR_DrawDebugGraph ();
 
 			SCR_DrawPause ();
 
 			SCR_DrawConsole ();
+
+			 /* FS: cl_draw* friends */
+			SCR_DrawTime ();
+			SCR_DrawUptime();
+			SCR_ShowFPS ();	// Knightmare
 
 			M_Draw ();
 

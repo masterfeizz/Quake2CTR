@@ -39,7 +39,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 // game.h -- game dll information visible to server
 
-#define	GAME_API_VERSION	3
+#define	GAME_API_VERSION	4
 
 // edict->svflags
 
@@ -121,10 +121,10 @@ struct edict_s
 typedef struct
 {
 	// special messages
-	void	(*bprintf) (int printlevel, char *fmt, ...);
-	void	(*dprintf) (char *fmt, ...);
-	void	(*cprintf) (edict_t *ent, int printlevel, char *fmt, ...);
-	void	(*centerprintf) (edict_t *ent, char *fmt, ...);
+	void	(*bprintf) (int printlevel, char *fmt, ...) __fp_attribute__((__format__(__printf__,2,3)));
+	void	(*dprintf) (unsigned int developerFlags, char *fmt, ...) __fp_attribute__((__format__(__printf__,2,3))); /* FS: Added developer flags */
+	void	(*cprintf) (edict_t *ent, int printlevel, char *fmt, ...) __fp_attribute__((__format__(__printf__,3,4)));
+	void	(*centerprintf) (edict_t *ent, char *fmt, ...) __fp_attribute__((__format__(__printf__,2,3)));
 	void	(*sound) (edict_t *ent, int channel, int soundindex, float volume, float attenuation, float timeofs);
 	void	(*positioned_sound) (vec3_t origin, edict_t *ent, int channel, int soundinedex, float volume, float attenuation, float timeofs);
 
@@ -134,7 +134,7 @@ typedef struct
 	// they connect, and changes are sent to all connected clients.
 	void	(*configstring) (int num, char *string);
 
-	void	(*error) (char *fmt, ...);
+	void	(*error) (char *fmt, ...) __fp_attribute__((__noreturn__, __format__(__printf__,1,2)));
 
 	// the *index functions create configstrings and some internal server state
 	int		(*modelindex) (char *name);
@@ -181,6 +181,7 @@ typedef struct
 	cvar_t	*(*cvar) (char *var_name, char *value, int flags);
 	cvar_t	*(*cvar_set) (char *var_name, char *value);
 	cvar_t	*(*cvar_forceset) (char *var_name, char *value);
+	void	(*cvar_setdescription) (char *var_name, const char *description); /* FS */
 
 	// ClientCommand and ServerCommand parameter access
 	int		(*argc) (void);
@@ -251,4 +252,4 @@ typedef struct
 	int			max_edicts;
 } game_export_t;
 
-game_export_t *GetGameApi (game_import_t *import);
+game_export_t *GetGameAPI (game_import_t *import);

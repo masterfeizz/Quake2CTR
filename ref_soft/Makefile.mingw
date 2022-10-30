@@ -1,0 +1,87 @@
+CC = gcc
+
+# abrash's asm optimizations:
+USE_ASM=1
+#
+USE_SSE=0
+
+CFLAGS = -m32 -Wall -O2 -fno-strict-aliasing -fomit-frame-pointer
+CPPFLAGS = -DNDEBUG
+LDFLAGS = -m32 -shared -Wl,--enable-auto-image-base -Wl,--no-undefined
+LDLIBS = -lwinmm -lgdi32
+
+ifeq ($(USE_ASM),1)
+CPPFLAGS+= -Did386=1
+endif
+
+ifeq ($(USE_SSE),1)
+CFLAGS += -march=pentium3
+endif
+
+REFSOFT = ../game/q_shared.o \
+	../win32/q_shwin.o \
+	../win32/rw_imp.o \
+	../win32/rw_ddraw.o \
+	../win32/rw_dib.o \
+	r_alias.o \
+	r_main.o \
+	r_light.o \
+	r_misc.o \
+	r_model.o \
+	r_part.o \
+	r_poly.o \
+	r_polyse.o \
+	r_rast.o \
+	r_scan.o \
+	r_sprite.o \
+	r_surf.o \
+	r_aclip.o \
+	r_bsp.o \
+	r_draw.o \
+	r_edge.o \
+	r_image.o
+
+ifeq ($(USE_ASM),1)
+REFASM = ../gas/math_ref.o \
+	../gas/math.o \
+	../gas/r_aclipa.o \
+	../gas/r_aliasa.o \
+	../gas/r_draw16.o \
+	../gas/r_drawa.o \
+	../gas/r_edgea.o \
+	../gas/r_parta.o \
+	../gas/r_polysa.o \
+	../gas/r_scana.o \
+	../gas/r_spr8.o \
+	../gas/r_surf8.o \
+	../gas/r_varsa.o \
+	../gas/sys_dosa.o
+endif
+
+.PHONY: all test clean
+#
+
+OBJECTS =  $(REFASM) $(REFSOFT)
+
+all: ref_soft.dll
+
+ref_soft.dll: $(OBJECTS) ref_soft.def
+	$(CC) -o ref_soft.dll $(LDFLAGS) $(OBJECTS) ref_soft.def $(LDLIBS)
+
+clean:
+	rm -f *.o
+	rm -f ../win32/*.o
+	rm -f ../game/*.o
+	rm -f ../gas/*.o
+
+DO_AS=$(CC) -x assembler-with-cpp
+
+%.o : %.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+
+%.o: %.S
+	$(DO_AS) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+
+%.o: %.s
+	$(DO_AS) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+

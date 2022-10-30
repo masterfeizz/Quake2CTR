@@ -24,9 +24,12 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 console_t	con;
 
 cvar_t		*con_notifytime;
+cvar_t		*con_buffersize; /* FS: Now a CVAR. */
 
 
 #define		MAXCMDLINE	256
+#define		CONWIDTH_AT_640X480	78 /* FS: Added */
+
 extern	char	key_lines[32][MAXCMDLINE];
 extern	int		edit_line;
 extern	int		key_linepos;
@@ -93,7 +96,7 @@ void Con_ToggleConsole_f (void)
 		M_ForceMenuOff ();
 		cls.key_dest = key_console;	
 
-		if (Cvar_VariableValue ("maxclients") == 1 
+		if (Cvar_VariableValueInt ("maxclients") == 1
 			&& Com_ServerState ())
 			Cvar_Set ("paused", "1");
 	}
@@ -129,7 +132,7 @@ Con_Clear_f
 */
 void Con_Clear_f (void)
 {
-	memset (con.text, ' ', CON_TEXTSIZE);
+	memset(con.text, ' ', con.textsize);
 }
 
 						
@@ -145,7 +148,7 @@ void Con_Dump_f (void)
 	int		l, x;
 	char	*line;
 	FILE	*f;
-	char	buffer[1024];
+	char	*buffer;
 	char	name[MAX_OSPATH];
 
 	if (Cmd_Argc() != 2)
@@ -177,7 +180,14 @@ void Con_Dump_f (void)
 	}
 
 	// write the remaining lines
-	buffer[con.linewidth] = 0;
+	buffer = (char *)calloc(1, sizeof(char) * (con.linewidth + 1));
+	if (!buffer)
+	{
+		Com_Error(ERR_FATAL, "Error allocating memory.\n");
+		fclose(f);
+		return;
+	}
+
 	for ( ; l <= con.current ; l++)
 	{
 		line = con.text + (l%con.totallines)*con.linewidth;
@@ -195,6 +205,7 @@ void Con_Dump_f (void)
 		fprintf (f, "%s\n", buffer);
 	}
 
+	free(buffer);
 	fclose (f);
 }
 
@@ -245,27 +256,49 @@ If the line width has changed, reformat the buffer.
 void Con_CheckResize (void)
 {
 	int		i, j, width, oldwidth, oldtotallines, numlines, numchars;
-	char	tbuf[CON_TEXTSIZE];
+	char	*tbuf;
 
 	width = (viddef.width >> 3) - 2;
 
-	if (width == con.linewidth)
-		return;
+	if (con_buffersize->modified == false)
+	{
+		if (width == con.linewidth)
+			return;
+	}
 
 	if (width < 1)			// video hasn't been initialized yet
 	{
 		width = 38;
 		con.linewidth = width;
-		con.totallines = CON_TEXTSIZE / con.linewidth;
-		memset (con.text, ' ', CON_TEXTSIZE);
+		con.totallines = con.textsize / con.linewidth;
+		memset(con.text, ' ', con.textsize);
 	}
 	else
 	{
 		oldwidth = con.linewidth;
 		con.linewidth = width;
 		oldtotallines = con.totallines;
-		con.totallines = CON_TEXTSIZE / con.linewidth;
+		con.totallines = con_buffersize->intValue / con.linewidth; /* FS: Use the CVAR instead of con.textsize because we might do some other magic here in a few lines.  Avoids reshuffling some stuff around. */
 		numlines = oldtotallines;
+
+		if (con_buffersize->modified) /* FS */
+		{
+			if (con_buffersize->intValue < 1024)
+				Cvar_ForceSet("con_buffersize", "1024");
+
+			if (con.text)
+				free(con.text);
+
+			con.text = (char *)calloc(1, sizeof(char)*con_buffersize->intValue);
+			con.textsize = con_buffersize->intValue;
+			con_buffersize->modified = false;
+
+			if (oldtotallines > con.totallines)
+				oldtotallines = con.totallines;
+
+			if (oldwidth > con.linewidth)
+				oldwidth = con.linewidth;
+		}
 
 		if (con.totallines < numlines)
 			numlines = con.totallines;
@@ -275,8 +308,15 @@ void Con_CheckResize (void)
 		if (con.linewidth < numchars)
 			numchars = con.linewidth;
 
-		memcpy (tbuf, con.text, CON_TEXTSIZE);
-		memset (con.text, ' ', CON_TEXTSIZE);
+		tbuf = (char *)calloc(1, sizeof(char)*con.textsize);
+		if (!tbuf)
+		{
+			Com_Error(ERR_FATAL, "Con_CheckResize(): Failed to allocate memory for tbuf.\n");
+			return;
+		}
+
+		memcpy(tbuf, con.text, con.textsize);
+		memset(con.text, ' ', con.textsize);
 
 		for (i=0 ; i<numlines ; i++)
 		{
@@ -287,6 +327,9 @@ void Con_CheckResize (void)
 							  oldtotallines) * oldwidth + j];
 			}
 		}
+
+		free(tbuf);
+		tbuf = NULL;
 
 		Con_ClearNotify ();
 	}
@@ -303,6 +346,14 @@ Con_Init
 */
 void Con_Init (void)
 {
+	/* FS: Have to parse this early. */
+	con_buffersize = Cvar_Get("con_buffersize", va("%d", DEFAULT_CON_TEXTSIZE), CVAR_ARCHIVE);
+	Cvar_SetDescription("con_buffersize", "Sets the buffer size of the console output.");
+	con_buffersize->modified = false;
+
+	con.text = (char *)calloc(1, sizeof(char)*con_buffersize->intValue);
+	con.textsize = con_buffersize->intValue;
+
 	con.linewidth = -1;
 
 	Con_CheckResize ();
@@ -480,10 +531,10 @@ void Con_DrawInput (void)
 		text += 1 + key_linepos - con.linewidth;
 		
 // draw it
-	y = con.vislines-16;
+	y = con.vislines-22;
 
 	for (i=0 ; i<con.linewidth ; i++)
-		re.DrawChar ( (i+1)<<3, con.vislines - 22, text[i]);
+		re.DrawChar ( (i+1)<<3, y, text[i]);
 
 // remove cursor
 	key_lines[edit_line][key_linepos] = 0;
@@ -575,6 +626,8 @@ void Con_DrawConsole (float frac)
 	int				lines;
 	char			version[64];
 	char			dlbar[1024];
+	int				verlen;
+	int				dlbarlen;
 
 	lines = viddef.height * frac;
 	if (lines <= 0)
@@ -589,8 +642,16 @@ void Con_DrawConsole (float frac)
 	SCR_AddDirtyPoint (viddef.width-1,lines-1);
 
 	Com_sprintf (version, sizeof(version), "v%4.2f", VERSION);
-	for (x=0 ; x<5 ; x++)
-		re.DrawChar (viddef.width-44+x*8, lines-12, 128 + version[x] );
+	verlen = strlen(version);
+//	for (x=0 ; x<5 ; x++)
+//		re.DrawChar (viddef.width-44+x*8, lines-12, 128 + version[x] );
+	if (!cls.downloadrate)
+	{
+		for (x=0 ; x<verlen ; x++)
+		{
+			re.DrawChar (viddef.width-(verlen*8+4)+x*8, lines-12, 128 + version[x] );
+		}
+	}
 
 // draw the text
 	con.vislines = lines;
@@ -630,14 +691,108 @@ void Con_DrawConsole (float frac)
 			re.DrawChar ( (x+1)<<3, y, text[x]);
 	}
 
-//ZOID
-	// draw the download bar
-	// figure out width
-	if (cls.download) {
+//ZOID- draw the download bar
+#ifdef USE_CURL	// HTTP downloading from R1Q2
+	if ( cls.downloadname[0] && (cls.download || cls.downloadposition) )
+#else
+	if (cls.download)
+#endif	// USE_CURL
+	{
 		if ((text = strrchr(cls.downloadname, '/')) != NULL)
+		{
 			text++;
+		}
 		else
+		{
 			text = cls.downloadname;
+		}
+
+		// make this a little shorter in case of longer version string
+		if (con.linewidth >= CONWIDTH_AT_640X480)
+		{
+			x = con.linewidth - ((con.linewidth * 7) / 40) - (verlen-12);
+		}
+		else
+		{
+			x = con.linewidth - ((con.linewidth * 7) / 40) - (verlen+1);
+		}
+
+		if (cls.downloadrate > 0.0f)
+		{
+			if(con.linewidth >= CONWIDTH_AT_640X480)
+				y = x - strlen(text) - 19;
+			else
+			{
+				y = x - strlen(text) - 9;
+			}
+		}
+		else
+		{
+			if(con.linewidth >= CONWIDTH_AT_640X480)
+				y = x - strlen(text) - 8;
+			else
+			{
+				y = x - strlen(text) - 2;
+			}
+		}
+
+		i = con.linewidth/3;
+
+		if (strlen(text) > i)
+		{
+			y = x - i - 11;
+			strncpy(dlbar, text, i);
+			dlbar[i] = 0;
+			strcat(dlbar, "...");
+		} else
+			strcpy(dlbar, text);
+		strcat(dlbar, ": ");
+		i = strlen(dlbar);
+		dlbar[i++] = '\x80';
+		// where's the dot go?
+		if (cls.downloadpercent == 0)
+		{
+			n = 0;
+		}
+		else
+		{
+			n = y * cls.downloadpercent / 100;
+		}
+			
+		for (j = 0; j < y; j++)
+		{
+			if (j == n)
+			{
+				dlbar[i++] = '\x83';
+			}
+			else
+			{
+				dlbar[i++] = '\x81';
+			}
+		}
+		dlbar[i++] = '\x82';
+		dlbar[i] = 0;
+
+		dlbarlen = strlen(dlbar);
+
+		if (cls.downloadrate > 0.0f)
+			Com_sprintf(dlbar + dlbarlen, sizeof(dlbar)-dlbarlen, " %2d%% (%4.2fKB/s)", cls.downloadpercent, cls.downloadrate);
+		else
+			Com_sprintf(dlbar + dlbarlen, sizeof(dlbar)-dlbarlen, " %2d%%", cls.downloadpercent);
+
+		dlbarlen = strlen(dlbar);
+
+		// draw it
+		y = con.vislines-12;
+		for (i = 0; i < dlbarlen; i++)
+			re.DrawChar ( (i+1)<<3, y, dlbar[i]);
+	}
+//ZOID
+
+#ifdef GAMESPY
+	if (cls.gamespyupdate) /* FS: For gamespy server list */
+	{
+		text = "Gamespy";
 
 		x = con.linewidth - ((con.linewidth * 7) / 40);
 		y = x - strlen(text) - 8;
@@ -653,10 +808,10 @@ void Con_DrawConsole (float frac)
 		i = strlen(dlbar);
 		dlbar[i++] = '\x80';
 		// where's the dot go?
-		if (cls.downloadpercent == 0)
+		if (cls.gamespypercent == 0)
 			n = 0;
 		else
-			n = y * cls.downloadpercent / 100;
+			n = y * cls.gamespypercent / 100;
 			
 		for (j = 0; j < y; j++)
 			if (j == n)
@@ -666,14 +821,17 @@ void Con_DrawConsole (float frac)
 		dlbar[i++] = '\x82';
 		dlbar[i] = 0;
 
-		sprintf(dlbar + strlen(dlbar), " %02d%%", cls.downloadpercent);
+		dlbarlen = strlen(dlbar);
+
+		Com_sprintf(dlbar + dlbarlen, sizeof(dlbar)-dlbarlen, " %02d%%", cls.gamespypercent);
+		dlbarlen = strlen(dlbar);
 
 		// draw it
 		y = con.vislines-12;
-		for (i = 0; i < strlen(dlbar); i++)
+		for (i = 0; i < dlbarlen; i++)
 			re.DrawChar ( (i+1)<<3, y, dlbar[i]);
 	}
-//ZOID
+#endif
 
 // draw the input prompt, user text, and cursor if desired
 	Con_DrawInput ();

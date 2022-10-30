@@ -24,12 +24,12 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #define	NUM_CON_TIMES 4
 
-#define		CON_TEXTSIZE	32768
+#define	DEFAULT_CON_TEXTSIZE	65536 /* FS: Was 32768 */
 typedef struct
 {
 	qboolean	initialized;
 
-	char	text[CON_TEXTSIZE];
+	char	*text;			/* FS: Now dynamic size. */
 	int		current;		// line where next message will be printed
 	int		x;				// offset in current line for next print
 	int		display;		// bottom of console displays this line
@@ -45,6 +45,7 @@ typedef struct
 
 	float	times[NUM_CON_TIMES];	// cls.realtime time the line was generated
 								// for transparent notify lines
+	size_t	textsize;		/* FS */
 } console_t;
 
 extern	console_t	con;

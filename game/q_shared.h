@@ -17,10 +17,10 @@ along with this program; if not, write to the Free Software
 Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 */
-	
+
 // q_shared.h -- included first by ALL program modules
 
-#ifdef _WIN32
+#ifdef _MSC_VER
 // unknown pragmas are SUPPOSED to be ignored, but....
 #pragma warning(disable : 4244)     // MIPS
 #pragma warning(disable : 4136)     // X86
@@ -28,10 +28,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #pragma warning(disable : 4018)     // signed/unsigned mismatch
 #pragma warning(disable : 4305)		// truncation from const double to float
-
+#pragma warning(disable : 4996)		/* FS: Shut up about VS2005 shit */
 #endif
 
-#include <assert.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -39,26 +38,53 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <stdlib.h>
 #include <time.h>
 
-#if (defined _M_IX86 || defined __i386__) && !defined C_ONLY && !defined __sun__
-#define id386	0	//turn off assembly
-#else
-#define id386	0
-#endif
-
-#if defined _M_ALPHA && !defined C_ONLY
-#define idaxp	1
-#else
-#define idaxp	0
-#endif
 
 typedef unsigned char 		byte;
+#if defined(__cplusplus)
+typedef int			qboolean;
+#else
 typedef enum {false, true}	qboolean;
+#endif
 
+#ifndef id386
+#define id386 0
+#endif
 
 #ifndef NULL
 #define NULL ((void *)0)
 #endif
 
+#if !defined(__GNUC__)
+#define	__attribute__(x)
+#endif
+
+/* argument format attributes for function
+ * pointers are supported for gcc >= 3.1
+ */
+#if defined(__GNUC__) && (__GNUC__ > 3 || (__GNUC__ == 3 && __GNUC_MINOR__ > 0))
+#define	__fp_attribute__	__attribute__
+#else
+#define	__fp_attribute__(x)
+#endif
+
+#ifdef __DJGPP__
+int vsnprintf(char *str, size_t n, const char *fmt, va_list ap) __attribute__((__format__(__printf__,3,0)));
+#endif
+#if defined(__DJGPP__) || defined(_WIN32)
+char *strtok_r(char *s, const char *delim, char **last);
+#endif
+
+/* from Quake3 */
+#ifdef _WIN32
+#define Q_vsnprintf _vsnprintf
+#else
+#define Q_vsnprintf  vsnprintf
+#endif
+
+#define CL_MASTER_ADDR	"maraakate.org" /* FS: master.gamespy.com & co are dead */
+#define CL_MASTER_PORT	"28900"
+#define SV_MASTER_IP	"maraakate.org" /* FS: master.gamespy.com & co are dead */
+#define SV_MASTER_PORT	"27900"
 
 // angle indexes
 #define	PITCH				0		// up / down
@@ -67,10 +93,10 @@ typedef enum {false, true}	qboolean;
 
 #define	MAX_STRING_CHARS	1024	// max length of a string passed to Cmd_TokenizeString
 #define	MAX_STRING_TOKENS	80		// max tokens resulting from Cmd_TokenizeString
-#define	MAX_TOKEN_CHARS		128		// max length of an individual token
+#define	MAX_TOKEN_CHARS		512		/* FS: From R1Q2: Was 128 */ // max length of an individual token
 
 #define	MAX_QPATH			64		// max length of a quake game pathname
-#define	MAX_OSPATH			128		// max length of a filesystem pathname
+#define	MAX_OSPATH			256		// max length of a filesystem pathname
 
 //
 // per-level limits
@@ -130,9 +156,32 @@ typedef	int	fixed4_t;
 typedef	int	fixed8_t;
 typedef	int	fixed16_t;
 
+// Knightmare added
+#ifndef min
+#define min(a,b)	(((a) < (b)) ? (a) : (b))
+#endif
+#ifndef max
+#define max(a,b)	(((a) > (b)) ? (a) : (b))
+#endif
+
+/* FS: Added */
+#ifndef bound
+#define bound(a,b,c) ((a) >= (c) ? (a) : \
+					(b) < (a) ? (a) : (b) > (c) ? (c) : (b))
+#endif
+
 #ifndef M_PI
 #define M_PI		3.14159265358979323846	// matches value in gcc v2 math.h
 #endif
+
+#ifndef M_PI2
+#define M_PI2					6.28318530717958647692	// Matches value in GCC v2 math.h
+#endif
+
+#define SqrtFast(x)				((x) * Q_rsqrt(x))
+
+#define DEG2RAD(a)				(((a) * M_PI) / 180.0F)
+#define RAD2DEG(a)				(((a) * 180.0F) / M_PI)
 
 struct cplane_s;
 
@@ -145,10 +194,10 @@ extern vec3_t vec3_origin;
 // microsoft's fabs seems to be ungodly slow...
 //float Q_fabs (float f);
 //#define	fabs(f) Q_fabs(f)
-#if !defined C_ONLY && !defined __linux__ && !defined __sgi
-extern long Q_ftol( float f );
+#if defined(_MSC_VER) && defined(_M_IX86) && !defined(C_ONLY)
+extern int Q_ftol( float f );
 #else
-#define Q_ftol( f ) ( long ) (f)
+#define Q_ftol( f ) (int) (f)
 #endif
 
 #define DotProduct(x,y)			(x[0]*y[0]+x[1]*y[1]+x[2]*y[2])
@@ -218,7 +267,11 @@ void COM_DefaultExtension (char *path, char *extension);
 char *COM_Parse (char **data_p);
 // data is an in/out parm, returns a parsed out token
 
-void Com_sprintf (char *dest, int size, char *fmt, ...);
+void Com_sprintf (char *dest, int size, char *fmt, ...) __attribute__((__format__(__printf__,3,4)));
+// Knightmare added
+void Com_strcpy (char *dest, int destSize, const char *src);
+void Com_strcat (char *dest, int destSize, const char *src);
+long Com_HashFileName (const char *fname, int hashSize, qboolean sized);
 
 void Com_PageInMemory (byte *buffer, int size);
 
@@ -228,6 +281,11 @@ void Com_PageInMemory (byte *buffer, int size);
 int Q_stricmp (char *s1, char *s2);
 int Q_strcasecmp (char *s1, char *s2);
 int Q_strncasecmp (char *s1, char *s2, int n);
+/* FS: From KMQ2 */
+void Q_strncpyz (char *dst, const char *src, int dstSize);
+void Q_strncatz (char *dst, const char *src, int dstSize);
+char *Q_strlwr (char *string);
+char *Q_strupr (char *string);
 
 //=============================================
 
@@ -239,7 +297,7 @@ float	BigFloat (float l);
 float	LittleFloat (float l);
 
 void	Swap_Init (void);
-char	*va(char *format, ...);
+char	*va(char *format, ...) __attribute__((__format__(__printf__,1,2)));
 
 //=============================================
 
@@ -255,6 +313,16 @@ void Info_RemoveKey (char *s, char *key);
 void Info_SetValueForKey (char *s, char *key, char *value);
 qboolean Info_Validate (char *s);
 
+/* ============================================= */
+
+/* Random number generator */
+#if 0 /* FS: Currently broken in DJGPP */
+int  randk(void);
+float frandk(void);
+float crandk(void);
+void randk_seed(void);
+#endif
+
 /*
 ==============================================================
 
@@ -266,6 +334,7 @@ SYSTEM SPECIFIC
 extern	int	curtime;		// time returned by last Sys_Milliseconds
 
 int		Sys_Milliseconds (void);
+int		Sys_DOSTime(void); /* FS: DOS needs this for the random qport */
 void	Sys_Mkdir (char *path);
 
 // large block stack allocation routines
@@ -288,10 +357,9 @@ char	*Sys_FindFirst (char *path, unsigned musthave, unsigned canthave );
 char	*Sys_FindNext ( unsigned musthave, unsigned canthave );
 void	Sys_FindClose (void);
 
-
 // this is only here so the functions in q_shared.c and q_shwin.c can link
-void Sys_Error (char *error, ...);
-void Com_Printf (char *msg, ...);
+void Sys_Error (char *error, ...) __attribute__((__noreturn__, __format__(__printf__,1,2)));
+void Com_Printf (char *msg, ...) __attribute__((__format__(__printf__,1,2)));
 
 
 /*
@@ -321,6 +389,10 @@ typedef struct cvar_s
 	int			flags;
 	qboolean	modified;	// set each time the cvar is changed
 	float		value;
+	int			intValue; /* FS: Added */
+	char		*defaultValue; /* FS: Added */
+	char		*description; /* FS: Added */
+	int			defaultFlags; /* FS: Added */
 	struct cvar_s *next;
 } cvar_t;
 
@@ -368,7 +440,6 @@ COLLISION DETECTION
 #define	CONTENTS_LADDER			0x20000000
 
 
-
 #define	SURF_LIGHT		0x1		// value will hold the light strength
 
 #define	SURF_SLICK		0x2		// effects game physics
@@ -380,6 +451,7 @@ COLLISION DETECTION
 #define	SURF_FLOWING	0x40	// scroll towards angle
 #define	SURF_NODRAW		0x80	// don't bother referencing the texture
 
+#define SURF_ALPHATEST	0x02000000	// Knightmare- alpha test flag
 
 
 // content masks
@@ -392,6 +464,7 @@ COLLISION DETECTION
 #define	MASK_OPAQUE				(CONTENTS_SOLID|CONTENTS_SLIME|CONTENTS_LAVA)
 #define	MASK_SHOT				(CONTENTS_SOLID|CONTENTS_MONSTER|CONTENTS_WINDOW|CONTENTS_DEADMONSTER)
 #define MASK_CURRENT			(CONTENTS_CURRENT_0|CONTENTS_CURRENT_90|CONTENTS_CURRENT_180|CONTENTS_CURRENT_270|CONTENTS_CURRENT_UP|CONTENTS_CURRENT_DOWN)
+#define MASK_SHOT_NO_WINDOW		(CONTENTS_SOLID|CONTENTS_MONSTER|CONTENTS_DEADMONSTER)
 
 
 // gi.BoxEdicts() can return a list of either solid or trigger entities
@@ -617,6 +690,8 @@ typedef struct
 #define	RDF_IRGOGGLES		4
 #define RDF_UVGOGGLES		8
 //ROGUE
+
+#define RDF_FOVADAPT		0x40000000 /* FS: For sezeros fov_adapt CVAR */
 
 //
 // muzzle flashes / player effects
@@ -1198,3 +1273,23 @@ typedef struct
 extern int vidref_val;
 // PGM
 // ==================
+
+/* FS: Developer flags for developer cvar and DPrintf's */
+/* FS: No 0x00000001 because that would be developer->value 1 and we use that to show it all! */
+#define DEVELOPER_MSG_STANDARD		0x00000002 // 2
+#define DEVELOPER_MSG_SOUND			0x00000004 // 4
+#define DEVELOPER_MSG_NET			0x00000008 // 8
+#define DEVELOPER_MSG_IO			0x00000010 // 16
+#define DEVELOPER_MSG_GFX			0x00000020 // 32
+#define DEVELOPER_MSG_GAME			0x00000040 // 64
+#define DEVELOPER_MSG_MEM			0x00000080 // 128
+#define DEVELOPER_MSG_SERVER		0x00000100 // 256
+#define DEVELOPER_MSG_CD			0x00000200 // 512
+#define DEVELOPER_MSG_OGG			0x00000400 // 1024
+#define DEVELOPER_MSG_PHYSICS		0x00000800 // 2048
+#define DEVELOPER_MSG_ENTITY		0x00001000 // 4096
+#define DEVELOPER_MSG_SAVE			0x00002000 // 8192
+#define DEVELOPER_MSG_UNUSED1		0x00004000 // 16384
+#define DEVELOPER_MSG_UNUSED2		0x00008000 // 32768
+#define DEVELOPER_MSG_VERBOSE		0x00010000 // 65536
+#define DEVELOPER_MSG_GAMESPY		0x00020000 // 131072

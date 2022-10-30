@@ -26,6 +26,15 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "../client/ref.h"
 
+#ifdef __DJGPP__ /* djgpp-2.04 and newer. */
+#include <stdint.h>
+#elif defined(_MSC_VER)
+#include "msinttypes/stdint.h"
+#else
+#include <stdint.h>
+#endif
+
+
 #define REF_VERSION     "SOFT 0.01"
 
 // up / down
@@ -88,7 +97,7 @@ typedef struct
 	pixel_t                 *alphamap;              // 256 * 256 translucency map
 	int                             rowbytes;               // may be > width if displayed in a window
 									// can be negative for stupid dibs
-	int						width;          
+	int						width;
 	int						height;
 } viddef_t;
 
@@ -159,8 +168,11 @@ extern oldrefdef_t      r_refdef;
 #define MAXWORKINGVERTS (MAXVERTS+4)    // max points in an intermediate
 										//  polygon (while processing)
 // !!! if this is changed, it must be changed in d_ifacea.h too !!!
-#define MAXHEIGHT       1200
-#define MAXWIDTH        1600
+#define MAXHEIGHT		1200
+/* be careful if you ever want to change MAXWIDTH: 12.20 fixed
+ * point math used in R_ScanEdges() overflows at width 2048 !! */
+#define MAXWIDTH		2040
+#define MAXDIMENSION	((MAXHEIGHT > MAXWIDTH) ? MAXHEIGHT : MAXWIDTH)
 
 #define INFINITE_DISTANCE       0x10000         // distance that's always guaranteed to
 										//  be farther away than anything in
@@ -205,7 +217,7 @@ extern oldrefdef_t      r_refdef;
 #define ALIAS_Z_CLIP                            0x0010
 #define ALIAS_XY_CLIP_MASK                      0x000F
 
-#define SURFCACHE_SIZE_AT_320X240    1024*768
+#define SURFCACHE_SIZE_AT_320X240    (1024*768)
 
 #define BMODEL_FULLY_CLIPPED    0x10 // value returned by R_BmodelCheckBBox ()
 									 //  if bbox is trivially rejected
@@ -226,7 +238,7 @@ extern oldrefdef_t      r_refdef;
 
 // turbulence stuff
 
-#define AMP             8*0x10000
+#define AMP             (8*0x10000)
 #define AMP2    3
 #define SPEED   20
 
@@ -325,7 +337,6 @@ typedef struct
 	int                     surfwidth;      // in mipmapped texels
 	int                     surfheight;     // in mipmapped texels
 } drawsurf_t;
-
 
 
 typedef struct {
@@ -450,6 +461,7 @@ extern vec3_t   r_pright, r_pup, r_ppn;
 void D_DrawSurfaces (void);
 void R_DrawParticle( void );
 void D_ViewChanged (void);
+void D_SetParticleSize(void); // FS: Because particles like blood and bullet dust/spray/dunno the term look funny in high res
 void D_WarpScreen (void);
 void R_PolysetUpdateTables (void);
 
@@ -466,8 +478,6 @@ void R_DrawSurface (void);
 extern int              c_surf;
 
 extern byte             r_warpbuffer[WARP_WIDTH * WARP_HEIGHT];
-
-
 
 
 extern float    scale_for_mip;
@@ -512,9 +522,12 @@ extern int              r_screenwidth;
 
 extern int              r_drawnpolycount;
 
-extern int      sintable[1280];
-extern int      intsintable[1280];
-extern int		blanktable[1280];		// PGM
+#define TABLESIZE (MAXDIMENSION+CYCLE)
+
+// FS: these three changed from [1280] to [TABLESIZE].
+extern int      sintable[TABLESIZE];
+extern int      intsintable[TABLESIZE];
+extern int		blanktable[TABLESIZE];	// PGM
 
 extern  vec3_t  vup, base_vup;
 extern  vec3_t  vpn, base_vpn;
@@ -575,6 +588,11 @@ extern cvar_t   *r_lightlevel;  //FIXME HACK
 extern cvar_t	*vid_fullscreen;
 extern	cvar_t	*vid_gamma;
 
+extern	cvar_t	*sw_particle_size_override; // FS
+extern	cvar_t	*sw_particle_size; // FS
+extern	cvar_t	*sw_particle_size_min; // FS
+extern	cvar_t	*sw_particle_size_max; // FS
+extern	cvar_t	*r_gunfov; /* FS */
 
 extern  clipplane_t     view_clipplanes[4];
 extern int              *pfrustum_indexes[4];
@@ -717,10 +735,10 @@ void R_DrawTriangle( void );
 void R_AliasClipTriangle (finalvert_t *index0, finalvert_t *index1, finalvert_t *index2);
 
 
-extern float    r_time1;
-extern float	da_time1, da_time2;
-extern float	dp_time1, dp_time2, db_time1, db_time2, rw_time1, rw_time2;
-extern float	se_time1, se_time2, de_time1, de_time2, dv_time1, dv_time2;
+extern double    r_time1;
+extern double	da_time1, da_time2;
+extern double	dp_time1, dp_time2, db_time1, db_time2, rw_time1, rw_time2;
+extern double	se_time1, se_time2, de_time1, de_time2, dv_time1, dv_time2;
 extern int              r_frustum_indexes[4*6];
 extern int              r_maxsurfsseen, r_maxedgesseen, r_cnumsurfs;
 extern qboolean r_surfsonstack;
@@ -760,7 +778,7 @@ void R_NewMap (void);
 void R_Register (void);
 void R_UnRegister (void);
 void Draw_InitLocal (void);
-qboolean R_Init( void *hInstance, void *wndProc );
+int  R_Init(void *hInstance, void *wndProc);
 void R_Shutdown (void);
 void R_InitCaches (void);
 void D_FlushCaches (void);
@@ -793,6 +811,8 @@ extern unsigned d_8to24table[256]; // base
 
 void    Sys_MakeCodeWriteable (unsigned long startaddr, unsigned long length);
 void    Sys_SetFPCW (void);
+void	Sys_SetSP24_FPPrecision (void); /* FS */
+void	Sys_SetChopCW_FPPrecision (void); /* FS */
 
 void LoadPCX (char *filename, byte **pic, byte **palette, int *width, int *height);
 
@@ -811,6 +831,8 @@ typedef struct swstate_s
 {
 	qboolean fullscreen;
 	int      prev_mode;				// last valid SW mode
+
+	unsigned char *d_16to8table; // HTrigger : 16 to 8 bit conversion table
 
 	byte		gammatable[256];
 	byte		currentpalette[1024];
@@ -841,7 +863,7 @@ IMPLEMENTATION FUNCTIONS
 
 void		SWimp_BeginFrame( float camera_separation );
 void		SWimp_EndFrame (void);
-int			SWimp_Init( void *hInstance, void *wndProc );
+qboolean	SWimp_Init( void *hInstance, void *wndProc );
 void		SWimp_SetPalette( const unsigned char *palette);
 void		SWimp_Shutdown( void );
 rserr_t		SWimp_SetMode( int *pwidth, int *pheight, int mode, qboolean fullscreen );

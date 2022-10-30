@@ -224,7 +224,7 @@ void CL_RunDLights (void)
 			dl->radius = 0;
 			return;
 		}
-		dl->radius -= cls.frametime*dl->decay;
+		dl->radius -= cls.renderFrameTime*dl->decay;
 		if (dl->radius < 0)
 			dl->radius = 0;
 	}
@@ -1237,9 +1237,10 @@ void CL_BigTeleportParticles (vec3_t org)
 CL_BlasterParticles
 
 Wall impact puffs
+Knightmare- added color
 ===============
 */
-void CL_BlasterParticles (vec3_t org, vec3_t dir)
+void CL_BlasterParticles (vec3_t org, vec3_t dir, unsigned int color)
 {
 	int			i, j;
 	cparticle_t	*p;
@@ -1257,7 +1258,8 @@ void CL_BlasterParticles (vec3_t org, vec3_t dir)
 		active_particles = p;
 
 		p->time = cl.time;
-		p->color = 0xe0 + (rand()&7);
+	//	p->color = 0xe0 + (rand()&7);
+		p->color = color + (rand()&7);
 
 		d = rand()&15;
 		for (j=0 ; j<3 ; j++)
@@ -1279,9 +1281,10 @@ void CL_BlasterParticles (vec3_t org, vec3_t dir)
 ===============
 CL_BlasterTrail
 
+Knightmare- added color as parameter
 ===============
 */
-void CL_BlasterTrail (vec3_t start, vec3_t end)
+void CL_BlasterTrail (vec3_t start, vec3_t end, float color)
 {
 	vec3_t		move;
 	vec3_t		vec;
@@ -1314,7 +1317,7 @@ void CL_BlasterTrail (vec3_t start, vec3_t end)
 
 		p->alpha = 1.0;
 		p->alphavel = -1.0 / (0.3+frand()*0.2);
-		p->color = 0xe0;
+		p->color = color; //0xe0;
 		for (j=0 ; j<3 ; j++)
 		{
 			p->org[j] = move[j] + crand();
@@ -1682,7 +1685,7 @@ void CL_RailTrail (vec3_t start, vec3_t end)
 
 		p->alpha = 1.0;
 		p->alphavel = -1.0 / (0.6+frand()*0.2);
-		p->color = 0x0 + rand()&15;
+		p->color = 0x0 + (rand()&15);
 
 		for (j=0 ; j<3 ; j++)
 		{
@@ -1821,7 +1824,7 @@ void CL_FlyParticles (vec3_t origin, int count)
 	int			i;
 	cparticle_t	*p;
 	float		angle;
-	float		sr, sp, sy, cr, cp, cy;
+	float		sp, sy, cp, cy;
 	vec3_t		forward;
 	float		dist = 64;
 	float		ltime;
@@ -1832,8 +1835,12 @@ void CL_FlyParticles (vec3_t origin, int count)
 
 	if (!avelocities[0][0])
 	{
-		for (i=0 ; i<NUMVERTEXNORMALS*3 ; i++)
-			avelocities[0][i] = (rand()&255) * 0.01;
+		for (i=0 ; i< NUMVERTEXNORMALS ; i++) /* FS: GCC warning fix from yamagi q2 */
+		{
+			avelocities[i][0] = (rand()&255) * 0.01f;
+			avelocities[i][1] = (rand()&255) * 0.01f;
+			avelocities[i][2] = (rand()&255) * 0.01f;
+		}
 	}
 
 
@@ -1847,8 +1854,6 @@ void CL_FlyParticles (vec3_t origin, int count)
 		sp = sin(angle);
 		cp = cos(angle);
 		angle = ltime * avelocities[i][2];
-		sr = sin(angle);
-		cr = cos(angle);
 	
 		forward[0] = cp*cy;
 		forward[1] = cp*sy;
@@ -1923,7 +1928,7 @@ void CL_BfgParticles (entity_t *ent)
 	int			i;
 	cparticle_t	*p;
 	float		angle;
-	float		sr, sp, sy, cr, cp, cy;
+	float		sp, sy, cp, cy;
 	vec3_t		forward;
 	float		dist = 64;
 	vec3_t		v;
@@ -1931,8 +1936,12 @@ void CL_BfgParticles (entity_t *ent)
 	
 	if (!avelocities[0][0])
 	{
-		for (i=0 ; i<NUMVERTEXNORMALS*3 ; i++)
-			avelocities[0][i] = (rand()&255) * 0.01;
+		for (i=0 ; i< NUMVERTEXNORMALS ; i++) /* FS: GCC warning fix from yamagi q2 */
+		{
+			avelocities[i][0] = (rand()&255) * 0.01f;
+			avelocities[i][1] = (rand()&255) * 0.01f;
+			avelocities[i][2] = (rand()&255) * 0.01f;
+		}
 	}
 
 
@@ -1946,8 +1955,6 @@ void CL_BfgParticles (entity_t *ent)
 		sp = sin(angle);
 		cp = cos(angle);
 		angle = ltime * avelocities[i][2];
-		sr = sin(angle);
-		cr = cos(angle);
 	
 		forward[0] = cp*cy;
 		forward[1] = cp*sy;
@@ -2078,7 +2085,7 @@ void CL_TrapParticles (entity_t *ent)
 				dir[2] = k * 8;
 	
 				VectorNormalize (dir);						
-				vel = 50 + rand()&63;
+				vel = 50 + (rand()&63);
 				VectorScale (dir, vel, p->vel);
 
 				p->accel[0] = p->accel[1] = 0;
@@ -2188,6 +2195,7 @@ void CL_AddParticles (void)
 	int				color;
 	cparticle_t		*active, *tail;
 
+	time = 0; /* FS: Compiler warning */
 	active = NULL;
 	tail = NULL;
 
@@ -2268,7 +2276,7 @@ void CL_EntityEvent (entity_state_t *ent)
 		CL_TeleportParticles (ent->origin);
 		break;
 	case EV_FOOTSTEP:
-		if (cl_footsteps->value)
+		if (cl_footsteps->intValue)
 			S_StartSound (NULL, ent->number, CHAN_BODY, cl_sfx_footsteps[rand()&3], 1, ATTN_NORM, 0);
 		break;
 	case EV_FALLSHORT:

@@ -93,8 +93,11 @@ void Netchan_Init (void)
 	int		port;
 
 	// pick a port value that should be nice and random
+#ifdef __DJGPP__
+	port = Sys_DOSTime() & 0xffff; /* FS: DOS uclock() doesn't work */
+#else
 	port = Sys_Milliseconds() & 0xffff;
-
+#endif
 	showpackets = Cvar_Get ("showpackets", "0", 0);
 	showdrop = Cvar_Get ("showdrop", "0", 0);
 	qport = Cvar_Get ("qport", va("%i", port), CVAR_NOSET);
@@ -133,10 +136,11 @@ void Netchan_OutOfBandPrint (int net_socket, netadr_t adr, char *format, ...)
 {
 	va_list		argptr;
 	static char		string[MAX_MSGLEN - 4];
-	
+
 	va_start (argptr, format);
-	vsprintf (string, format,argptr);
+	Q_vsnprintf (string, sizeof(string), format, argptr);
 	va_end (argptr);
+	string[sizeof(string)-1] = 0;
 
 	Netchan_OutOfBand (net_socket, adr, strlen(string), (byte *)string);
 }
@@ -236,7 +240,6 @@ void Netchan_Transmit (netchan_t *chan, int length, byte *data)
 		chan->reliable_sequence ^= 1;
 	}
 
-
 // write the packet header
 	SZ_Init (&send, send_buf, sizeof(send_buf));
 
@@ -269,7 +272,7 @@ void Netchan_Transmit (netchan_t *chan, int length, byte *data)
 // send the datagram
 	NET_SendPacket (chan->sock, send.cursize, send.data, chan->remote_address);
 
-	if (showpackets->value)
+	if (showpackets->intValue)
 	{
 		if (send_reliable)
 			Com_Printf ("send %4i : s=%i reliable=%i ack=%i rack=%i\n"
@@ -299,7 +302,7 @@ qboolean Netchan_Process (netchan_t *chan, sizebuf_t *msg)
 {
 	unsigned	sequence, sequence_ack;
 	unsigned	reliable_ack, reliable_message;
-	int			qport;
+//	int			qport;
 
 // get sequence numbers		
 	MSG_BeginReading (msg);
@@ -307,16 +310,22 @@ qboolean Netchan_Process (netchan_t *chan, sizebuf_t *msg)
 	sequence_ack = MSG_ReadLong (msg);
 
 	// read the qport if we are a server
-	if (chan->sock == NS_SERVER)
-		qport = MSG_ReadShort (msg);
+//	if (chan->sock == NS_SERVER)
+//		qport = MSG_ReadShort (msg);
+
+	/* read the qport if we are a server */
+	if (chan->sock == NS_SERVER) /* FS: From yamagi q2 */
+	{
+		(void)MSG_ReadShort(msg);
+	}
 
 	reliable_message = sequence >> 31;
 	reliable_ack = sequence_ack >> 31;
 
 	sequence &= ~(1<<31);
-	sequence_ack &= ~(1<<31);	
+	sequence_ack &= ~(1<<31);
 
-	if (showpackets->value)
+	if (showpackets->intValue)
 	{
 		if (reliable_message)
 			Com_Printf ("recv %4i : s=%i reliable=%i ack=%i rack=%i\n"
@@ -338,7 +347,7 @@ qboolean Netchan_Process (netchan_t *chan, sizebuf_t *msg)
 //
 	if (sequence <= chan->incoming_sequence)
 	{
-		if (showdrop->value)
+		if (showdrop->intValue)
 			Com_Printf ("%s:Out of order packet %i at %i\n"
 				, NET_AdrToString (chan->remote_address)
 				,  sequence
@@ -352,7 +361,7 @@ qboolean Netchan_Process (netchan_t *chan, sizebuf_t *msg)
 	chan->dropped = sequence - (chan->incoming_sequence+1);
 	if (chan->dropped > 0)
 	{
-		if (showdrop->value)
+		if (showdrop->intValue)
 			Com_Printf ("%s:Dropped %i packets at %i\n"
 			, NET_AdrToString (chan->remote_address)
 			, chan->dropped

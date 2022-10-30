@@ -15,6 +15,37 @@ id386	equ		1
 ; !!! must be kept the same as in d_iface.h !!!
 TRANSPARENT_COLOR	equ		255
 
+; !!! must be kept the same as in qfiles.h !!!
+DTRIVERTX_V0		equ		0
+DTRIVERTX_V1		equ		1
+DTRIVERTX_V2		equ		2
+DTRIVERTX_LNI		equ		3
+DTRIVERTX_SIZE		equ		4
+
+; !!! must be kept the same as in r_local.h !!!
+FINALVERT_V0		equ		0
+FINALVERT_V1		equ		4
+FINALVERT_V2		equ		8
+FINALVERT_V3		equ		12
+FINALVERT_V4		equ		16
+FINALVERT_V5		equ		20
+FINALVERT_FLAGS		equ		24
+FINALVERT_X			equ		28
+FINALVERT_Y			equ		32
+FINALVERT_Z			equ		36
+FINALVERT_SIZE		equ		40
+
+; !!! must be kept the same as in r_local.h !!!
+ALIAS_LEFT_CLIP		equ		0001h
+ALIAS_TOP_CLIP		equ		0002h
+ALIAS_RIGHT_CLIP	equ		0004h
+ALIAS_BOTTOM_CLIP	equ		0008h
+ALIAS_Z_CLIP		equ		0010h
+ALIAS_XY_CLIP_MASK	equ		000Fh
+
+; !!! must be kept the same as in ref.h !!!
+ENTITY_FLAGS		equ		68
+
 ifndef GLQUAKE
 	externdef _d_zistepu:dword
 	externdef _d_pzbuffer:dword
@@ -43,7 +74,6 @@ ifndef GLQUAKE
 	externdef	_cacheblock:dword
 	externdef	_d_viewbuffer:dword
 	externdef	_cachewidth:dword
-	externdef	_d_pzbuffer:dword
 	externdef	_d_zrowbytes:dword
 	externdef	_d_zwidth:dword
 	externdef _d_scantable:dword
@@ -187,6 +217,22 @@ ifndef GLQUAKE
 	externdef _r_zistepy:dword
 	externdef _D_PolysetSetEdgeTable:dword
 	externdef _D_RasterizeAliasPolySmooth:dword
+	externdef _R_PolysetDrawSpans8_Opaque:PROC
+	externdef _d_pdrawspans:dword
+	externdef _vright:dword
+	externdef _vup:dword
+	externdef _vpn:dword
+	externdef _partparms:dword
+	externdef _s_prefetch_address:dword
+	externdef _r_screenwidth:dword
+	externdef _vid:dword
+	externdef _r_lerp_backv:dword
+	externdef _r_lerp_frontv:dword
+	externdef _r_lerp_move:dword
+	externdef _currententity:dword
+	externdef _s_ziscale:dword
+	externdef _aliasxscale:dword
+	externdef _aliasyscale:dword
 
 	externdef float_point5:dword
 	externdef Float2ToThe31nd:dword
@@ -240,6 +286,7 @@ endif
 
 	externdef _fpu_ceil_cw:dword
 	externdef _fpu_chop_cw:dword
+	externdef _fpu_sp24_ceil_cw:dword
 	externdef _snd_scaletable:dword
 	externdef _paintbuffer:dword
 	externdef _snd_linear_count:dword
@@ -433,3 +480,15 @@ mtri_size			equ		16	; !!! if this changes, array indexing in !!!
 								; !!! d_polysa.s must be changed to match !!!
 mtri_shift			equ		4
 
+; partparms_t structure
+partparms_particle	equ		0
+partparms_level		equ		4
+partparms_color		equ		8
+
+; vid_t structure
+vid_buffer			equ		0
+vid_colormap		equ		4
+vid_alphamap		equ		8
+vid_rowbytes		equ		12
+vid_width			equ		16
+vid_height			equ		20

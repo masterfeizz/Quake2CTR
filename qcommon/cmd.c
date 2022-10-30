@@ -20,17 +20,11 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // cmd.c -- Quake script command processing module
 
 #include "qcommon.h"
+#include "cmd.h"
 
+#ifndef DEDICATED_ONLY
 void Cmd_ForwardToServer (void);
-
-#define	MAX_ALIAS_NAME	32
-
-typedef struct cmdalias_s
-{
-	struct cmdalias_s	*next;
-	char	name[MAX_ALIAS_NAME];
-	char	*value;
-} cmdalias_t;
+#endif
 
 cmdalias_t	*cmd_alias;
 
@@ -39,6 +33,8 @@ qboolean	cmd_wait;
 #define	ALIAS_LOOP_COUNT	16
 int		alias_count;		// for detecting runaway loops
 
+qboolean	Sort_Possible_Strtolower (char *partial, char *complete); /* FS: Added */
+void Cmd_Flushlog_f (void); /* FS: Added: clear the logfile */
 
 //=============================================================================
 
@@ -66,9 +62,9 @@ void Cmd_Wait_f (void)
 */
 
 sizebuf_t	cmd_text;
-byte		cmd_text_buf[8192];
+byte		cmd_text_buf[32768]; // Knightmare increased, was 8192
 
-byte		defer_text_buf[8192];
+byte		defer_text_buf[32768]; // Knightmare increased, was 8192
 
 /*
 ============
@@ -158,7 +154,7 @@ Cbuf_InsertFromDefer
 */
 void Cbuf_InsertFromDefer (void)
 {
-	Cbuf_InsertText (defer_text_buf);
+	Cbuf_InsertText ((char *)defer_text_buf);
 	defer_text_buf[0] = 0;
 }
 
@@ -215,15 +211,21 @@ void Cbuf_Execute (void)
 			if (text[i] == '\n')
 				break;
 		}
-			
-				
-		memcpy (line, text, i);
-		line[i] = 0;
-		
+
+		// R1ch's fix for overflow vulnerability
+		if (i > sizeof(line) - 1) {
+			Com_Printf ("Cbuf_Execute: overflow of %d truncated\n", i);
+			memcpy (line, text, sizeof(line)-1);
+			line[sizeof(line)-1] = 0;
+		}
+		else {
+			memcpy (line, text, i);
+			line[i] = 0;
+		}
+
 // delete the text from the command buffer and move remaining commands down
 // this is necessary because commands (exec, alias) can insert data at the
 // beginning of the text buffer
-
 		if (i == cmd_text.cursize)
 			cmd_text.cursize = 0;
 		else
@@ -268,7 +270,7 @@ void Cbuf_AddEarlyCommands (qboolean clear)
 	for (i=0 ; i<COM_Argc() ; i++)
 	{
 		s = COM_Argv(i);
-		if (strcmp (s, "+set"))
+		if (strcmp (s, "+set") != 0)
 			continue;
 		Cbuf_AddText (va("set %s %s\n", COM_Argv(i+1), COM_Argv(i+2)));
 		if (clear)
@@ -315,9 +317,11 @@ qboolean Cbuf_AddLateCommands (void)
 	text[0] = 0;
 	for (i=1 ; i<argc ; i++)
 	{
-		strcat (text,COM_Argv(i));
+	//	strncat (text,COM_Argv(i));
+		Q_strncatz (text, COM_Argv(i), s+1);
 		if (i != argc-1)
-			strcat (text, " ");
+		//	strncat (text, " ");
+			Q_strncatz (text, " ", s+1);
 	}
 	
 // pull out the commands
@@ -336,8 +340,10 @@ qboolean Cbuf_AddLateCommands (void)
 			c = text[j];
 			text[j] = 0;
 			
-			strcat (build, text+i);
-			strcat (build, "\n");
+		//	strncat (build, text+i);
+		//	strncat (build, "\n");
+			Q_strncatz (build, text+i, s+1);
+			Q_strncatz (build, "\n", s+1);
 			text[j] = c;
 			i = j-1;
 		}
@@ -388,9 +394,10 @@ void Cmd_Exec_f (void)
 	Com_Printf ("execing %s\n",Cmd_Argv(1));
 	
 	// the file doesn't have a trailing 0, so we need to copy it off
-	f2 = Z_Malloc(len+1);
+	f2 = Z_Malloc(len+2); // Echon fix- was len+1
 	memcpy (f2, f, len);
-	f2[len] = 0;
+	f2[len] = '\n';  // Echon fix added
+	f2[len+1] = '\0'; // Echon fix- was len, = 0
 
 	Cbuf_InsertText (f2);
 
@@ -460,18 +467,22 @@ void Cmd_Alias_f (void)
 		a->next = cmd_alias;
 		cmd_alias = a;
 	}
-	strcpy (a->name, s);	
+//	strncpy (a->name, s);	
+	Q_strncpyz (a->name, s, sizeof(a->name));	
 
 // copy the rest of the command line
 	cmd[0] = 0;		// start out with a null string
 	c = Cmd_Argc();
 	for (i=2 ; i< c ; i++)
 	{
-		strcat (cmd, Cmd_Argv(i));
+	//	strncat (cmd, Cmd_Argv(i));
+		Q_strncatz (cmd, Cmd_Argv(i), sizeof(cmd));
 		if (i != (c - 1))
-			strcat (cmd, " ");
+		//	strncat (cmd, " ");
+			Q_strncatz (cmd, " ", sizeof(cmd));
 	}
-	strcat (cmd, "\n");
+//	strncat (cmd, "\n");
+	Q_strncatz (cmd, "\n", sizeof(cmd));
 	
 	a->value = CopyString (cmd);
 }
@@ -484,20 +495,12 @@ void Cmd_Alias_f (void)
 =============================================================================
 */
 
-typedef struct cmd_function_s
-{
-	struct cmd_function_s	*next;
-	char					*name;
-	xcommand_t				function;
-} cmd_function_t;
-
-
 static	int			cmd_argc;
 static	char		*cmd_argv[MAX_STRING_TOKENS];
 static	char		*cmd_null_string = "";
 static	char		cmd_args[MAX_STRING_CHARS];
 
-static	cmd_function_t	*cmd_functions;		// possible commands to execute
+cmd_function_t	*cmd_functions;		// possible commands to execute
 
 /*
 ============
@@ -585,10 +588,13 @@ char *Cmd_MacroExpandString (char *text)
 		}
 
 		strncpy (temporary, scan, i);
-		strcpy (temporary+i, token);
-		strcpy (temporary+i+j, start);
+	//	strncpy (temporary+i, token);
+	//	strncpy (temporary+i+j, start);
+		Q_strncpyz (temporary+i, token, sizeof(temporary)-i);
+		Q_strncpyz (temporary+i+j, start, sizeof(temporary)-i-j);
 
-		strcpy (expanded, temporary);
+//		strncpy (expanded, temporary);
+		Q_strncpyz (expanded, temporary, sizeof(expanded));
 		scan = expanded;
 		i--;
 
@@ -657,7 +663,7 @@ void Cmd_TokenizeString (char *text, qboolean macroExpand)
 		{
 			int		l;
 
-			strcpy (cmd_args, text);
+			Q_strncpyz (cmd_args, text, sizeof(cmd_args));
 
 			// strip off any trailing whitespace
 			l = strlen(cmd_args) - 1;
@@ -667,7 +673,7 @@ void Cmd_TokenizeString (char *text, qboolean macroExpand)
 				else
 					break;
 		}
-			
+
 		com_token = COM_Parse (&text);
 		if (!text)
 			return;
@@ -675,7 +681,8 @@ void Cmd_TokenizeString (char *text, qboolean macroExpand)
 		if (cmd_argc < MAX_STRING_TOKENS)
 		{
 			cmd_argv[cmd_argc] = Z_Malloc (strlen(com_token)+1);
-			strcpy (cmd_argv[cmd_argc], com_token);
+		//	strncpy (cmd_argv[cmd_argc], com_token);
+			Q_strncpyz (cmd_argv[cmd_argc], com_token, strlen(com_token)+1);
 			cmd_argc++;
 		}
 	}
@@ -782,19 +789,35 @@ char *Cmd_CompleteCommand (char *partial)
 		
 // check for exact match
 	for (cmd=cmd_functions ; cmd ; cmd=cmd->next)
+	{
 		if (!strcmp (partial,cmd->name))
+		{
 			return cmd->name;
+		}
+	}
 	for (a=cmd_alias ; a ; a=a->next)
+	{
 		if (!strcmp (partial, a->name))
+		{
 			return a->name;
+		}
+	}
 
 // check for partial match
 	for (cmd=cmd_functions ; cmd ; cmd=cmd->next)
+	{
 		if (!strncmp (partial,cmd->name, len))
+		{
 			return cmd->name;
+		}
+	}
 	for (a=cmd_alias ; a ; a=a->next)
+	{
 		if (!strncmp (partial, a->name, len))
+		{
 			return a->name;
+		}
+	}
 
 	return NULL;
 }
@@ -822,7 +845,7 @@ void	Cmd_ExecuteString (char *text)
 	// check functions
 	for (cmd=cmd_functions ; cmd ; cmd=cmd->next)
 	{
-		if (!Q_strcasecmp (cmd_argv[0],cmd->name))
+		if (cmd->name && !Q_strcasecmp (cmd_argv[0],cmd->name))
 		{
 			if (!cmd->function)
 			{	// forward to server command
@@ -854,9 +877,32 @@ void	Cmd_ExecuteString (char *text)
 		return;
 
 	// send it as a server command if we are connected
-	Cmd_ForwardToServer ();
+	if (dedicated && !dedicated->intValue) /* FS: Don't send this crud through dedicated servers */
+	{
+		Cmd_ForwardToServer ();
+	}
 }
 
+static int cmpr_cmds (const void *a, const void *b)
+{
+	cmd_function_t *aa = *(cmd_function_t **)a;
+	cmd_function_t *bb = *(cmd_function_t **)b;
+
+	return strcmp(aa->name, bb->name);
+}
+
+static int GetCmdCount (void)
+{
+	int i = 0;
+	cmd_function_t* cmd;
+
+	for (cmd = cmd_functions; cmd; cmd = cmd->next)
+	{
+		i++;
+	}
+
+	return i;
+}
 /*
 ============
 Cmd_List_f
@@ -864,13 +910,72 @@ Cmd_List_f
 */
 void Cmd_List_f (void)
 {
+	cmd_function_t	**sorted_cmds = NULL; /* FS: Sort by name. */
+	cmd_function_t	*head = &cmd_functions[0];
 	cmd_function_t	*cmd;
-	int				i;
+	const char *search_filter = NULL;
+	int		i = 0, j = 0, q = 0, args = 0, search_filter_len = 0, cmd_count = 0;
 
-	i = 0;
-	for (cmd=cmd_functions ; cmd ; cmd=cmd->next, i++)
-		Com_Printf ("%s\n", cmd->name);
-	Com_Printf ("%i commands\n", i);
+	args = Cmd_Argc();
+	if (args > 1) /* FS */
+	{
+		search_filter = Cmd_Argv(1);
+		if (search_filter)
+		{
+			Com_Printf("Listing matches for '%s'...\n", search_filter);
+
+			if (args > 2)
+			{
+				search_filter_len = strlen(search_filter);
+			}
+		}
+	}
+
+	cmd_count = GetCmdCount();
+
+	sorted_cmds = (cmd_function_t **)malloc(sizeof(cmd_function_t*)*cmd_count);
+	if (!sorted_cmds)
+	{
+		Com_Error(ERR_FATAL, "Cmd_List_f: Failed to allocate memory.");
+		return;
+	}
+
+	for (q = 0; q < cmd_count; q++)
+	{
+		sorted_cmds[q] = cmd_functions;
+		cmd_functions = cmd_functions->next;
+	}
+
+	qsort(sorted_cmds, cmd_count, sizeof(cvar_t*), &cmpr_cmds);
+
+	for (i = 0; i < cmd_count; i++)
+	{
+		cmd = sorted_cmds[i];
+		if (!cmd)
+		{
+			break;
+		}
+
+		if ((args > 1) && (search_filter)) /* FS */
+		{
+			if (!strstr(cmd->name, search_filter))
+				continue;
+
+			if ((args > 2) && (strncmp(cmd->name, search_filter, search_filter_len)))
+				continue;
+
+			j++;
+		}
+
+		Com_Printf("     %s\n", cmd->name); /* FS: Make it look consistent with cvarlist */
+	}
+
+	Com_Printf("%d commands\n", search_filter ? j: i);
+
+	free(sorted_cmds);
+	sorted_cmds = NULL;
+
+	cmd_functions = (cmd_function_t *)head;
 }
 
 /*
@@ -888,5 +993,80 @@ void Cmd_Init (void)
 	Cmd_AddCommand ("echo",Cmd_Echo_f);
 	Cmd_AddCommand ("alias",Cmd_Alias_f);
 	Cmd_AddCommand ("wait", Cmd_Wait_f);
+	Cmd_AddCommand ("flushlog", Cmd_Flushlog_f); /* FS: Added */
 }
 
+void Cmd_Shutdown(void)
+{
+	cmdalias_t *alias, *aNext;
+	cmd_function_t	*cmd, *next;
+
+	for (alias=cmd_alias; alias; alias = aNext)
+	{
+		aNext = alias->next;
+
+		if (alias->value)
+		{
+			Z_Free(alias->value);
+			alias->value = NULL;
+		}
+
+		Z_Free(alias);
+		alias = NULL;
+	}
+
+	for (cmd = cmd_functions; cmd; cmd = next)
+	{
+		next = cmd->next;
+
+		Z_Free(cmd);
+		cmd = NULL;
+	}
+}
+
+void Cmd_Flushlog_f (void) /* FS: clear the logfile */
+{
+	char name[MAX_OSPATH];
+	extern cvar_t	*logfile_name;
+	extern cvar_t	*logfile_active;
+	extern FILE		*logfile;
+
+	if (!logfile_name->string[0])
+	{
+		Com_Printf("Error: logfile_name not set.  Aborting flushlog.\n");
+		return;
+	}
+
+	if (!logfile_active->intValue)
+	{
+		Com_Printf("Warning: logfile disabled but logfile_name set; continuing with flushlog.\n");
+	}
+
+	Com_sprintf(name,sizeof(name), "%s/%s", FS_Gamedir(), logfile_name->string);
+
+	if (logfile)
+	{
+		fclose (logfile);
+	}
+
+	if (!logfile)
+	{
+		FS_CreatePath(name);
+	}
+
+	logfile = fopen (name, "w");
+
+	if(logfile)
+	{
+		Com_Printf("log cleared\n");
+		fputs("log cleared\n", logfile);
+		fflush(logfile);
+		fclose(logfile);
+	}
+	else
+	{
+		Com_Printf("Unable to open logfile for clearing: %s\n", name);
+	}
+
+	logfile = NULL;
+}
