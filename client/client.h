@@ -345,6 +345,13 @@ extern client_static_t	cls;
 //
 extern	cvar_t	*cl_stereo_separation;
 extern	cvar_t	*cl_stereo;
+extern	cvar_t	*r_stereo_depth;
+
+// 3DS stereoscopic 3D: at full strength (slider at max, r_stereo_depth 5) each eye is
+// STEREO_MAX_HALFEYE units from the center (see ctr/glimp_ctr.c, ref_gl STEREO_*)
+#define STEREO_MAX_HALFEYE	4.0f
+float		CTR_StereoSlider( void );
+qboolean	CTR_StereoEnable( qboolean enable );
 
 extern	cvar_t	*cl_gun;
 extern	cvar_t	*cl_add_blend;

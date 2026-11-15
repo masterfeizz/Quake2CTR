@@ -615,10 +615,17 @@ void R_SetFrustum (void)
 	VectorNormalize( frustum[2].normal );
 	VectorNormalize( frustum[3].normal );
 #else
+	// stereo: each eye's off-axis frustum is turned by up to atan(sep/C) from the
+	// centered one, so cull with a slightly wider view
+	float fov_x = r_newrefdef.fov_x;
+
+	if (gl_state.camera_separation != 0)
+		fov_x += 2 * atan (fabs (gl_state.camera_separation) / STEREO_CONVERGENCE) * 180 / M_PI + 1;
+
 	// rotate VPN right by FOV_X/2 degrees
-	RotatePointAroundVector( frustum[0].normal, vup, vpn, -(90-r_newrefdef.fov_x / 2 ) );
+	RotatePointAroundVector( frustum[0].normal, vup, vpn, -(90-fov_x / 2 ) );
 	// rotate VPN left by FOV_X/2 degrees
-	RotatePointAroundVector( frustum[1].normal, vup, vpn, 90-r_newrefdef.fov_x / 2 );
+	RotatePointAroundVector( frustum[1].normal, vup, vpn, 90-fov_x / 2 );
 	// rotate VPN up by FOV_X/2 degrees
 	RotatePointAroundVector( frustum[2].normal, vright, vpn, 90-r_newrefdef.fov_y / 2 );
 	// rotate VPN down by FOV_X/2 degrees
@@ -704,6 +711,32 @@ void R_SetupFrame (void)
 }
 
 
+float	r_stereo_ndc_shift;
+
+/*
+=============
+R_StereoNDCShift
+
+Sideways NDC shift of the current eye's off-axis frustum. For the world it makes points
+STEREO_CONVERGENCE units ahead line up in both eyes (screen depth). For the weapon, which
+moves with the eye and so has no parallax of its own, it places the whole model at
+STEREO_GUN_DEPTH. Both use the world projection's half width.
+=============
+*/
+float R_StereoNDCShift (qboolean weapon)
+{
+	float	e = gl_state.camera_separation, xscale;
+
+	if (e == 0)
+		return 0;
+
+	xscale = tan (r_newrefdef.fov_y * M_PI / 360.0) * (float)r_newrefdef.width / r_newrefdef.height;
+
+	if (weapon)
+		return e / xscale * (1.0f / STEREO_CONVERGENCE - 1.0f / STEREO_GUN_DEPTH);
+	return e / (STEREO_CONVERGENCE * xscale);
+}
+
 void MYgluPerspective( GLdouble fovy, GLdouble aspect,
 		     GLdouble zNear, GLdouble zFar )
 {
@@ -715,8 +748,9 @@ void MYgluPerspective( GLdouble fovy, GLdouble aspect,
    xmin = ymin * aspect;
    xmax = ymax * aspect;
 
-   xmin += -( 2 * gl_state.camera_separation ) / zNear;
-   xmax += -( 2 * gl_state.camera_separation ) / zNear;
+   // stereo: shift the frustum so the whole image moves r_stereo_ndc_shift in NDC
+   xmin -= r_stereo_ndc_shift * xmax;
+   xmax -= r_stereo_ndc_shift * xmax;
 
    qglFrustum( xmin, xmax, ymin, ymax, zNear, zFar );
 }
@@ -779,6 +813,7 @@ void R_SetupGL (void)
 	qglMatrixMode(GL_PROJECTION);
     qglLoadIdentity ();
  	/* Knightmare-  increase back clipping plane distance */
+	r_stereo_ndc_shift = R_StereoNDCShift (false);
 	MYgluPerspective (r_newrefdef.fov_y,  screenaspect,  4,  farz); // was 4096
 	/* end Knightmare */
 

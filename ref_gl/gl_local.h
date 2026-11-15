@@ -393,6 +393,15 @@ void	Draw_FadeScreen (void);
 void	Draw_StretchRaw (int x, int y, int w, int h, int cols, int rows, byte *data);
 
 void	R_BeginFrame( float camera_separation );
+
+/*
+** Stereoscopic 3D (3DS): camera_separation is the eye's sideways offset in world units
+** (negative = left eye). Each eye has an off-axis frustum so that points STEREO_CONVERGENCE
+** units ahead are at screen depth; the weapon is drawn at STEREO_GUN_DEPTH.
+*/
+#define STEREO_CONVERGENCE	96.0f
+#define STEREO_GUN_DEPTH	56.0f
+extern float	r_stereo_ndc_shift;	// sideways NDC shift applied by MYgluPerspective
 void	R_SwapBuffers( int );
 void	R_SetPalette ( const unsigned char *palette);
 

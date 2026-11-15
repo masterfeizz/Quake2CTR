@@ -463,6 +463,8 @@ V_RenderView
 */
 void V_RenderView( float stereo_separation )
 {
+	static vec3_t stereo_center;
+
 	extern int entitycmpfnc( const entity_t *, const entity_t * );
 
 	if (cls.state != ca_active)
@@ -480,7 +482,9 @@ void V_RenderView( float stereo_separation )
 
 	// an invalid frame will just use the exact previous refdef
 	// we can't use the old frame if the video mode has changed, though...
-	if ( cl.frame.valid && (cl.force_refdef || !cl_paused->intValue) )
+	// stereo: the scene is built once per frame, for the first (left) eye; the right eye
+	// reuses it, as building it changes prediction state (CL_CalcViewValues)
+	if ( cl.frame.valid && (cl.force_refdef || !cl_paused->intValue) && stereo_separation <= 0 )
 	{
 		cl.force_refdef = false;
 
@@ -513,21 +517,15 @@ void V_RenderView( float stereo_separation )
 			cl.refdef.blend[3] = 0;
 		}
 
-		// offset vieworg appropriately if we're doing stereo separation
-		if ( stereo_separation != 0 )
-		{
-			vec3_t tmp;
-
-			VectorScale( cl.v_right, stereo_separation, tmp );
-			VectorAdd( cl.refdef.vieworg, tmp, cl.refdef.vieworg );
-		}
-
 		// never let it sit exactly on a node line, because a water plane can
 		// dissapear when viewed with the eye exactly on it.
 		// the server protocol only specifies to 1/8 pixel, so add 1/16 in each axis
 		cl.refdef.vieworg[0] += 1.0/16;
 		cl.refdef.vieworg[1] += 1.0/16;
 		cl.refdef.vieworg[2] += 1.0/16;
+
+		// the centered view; each eye is offset from it below
+		VectorCopy( cl.refdef.vieworg, stereo_center );
 
 		cl.refdef.x = scr_vrect.x;
 		cl.refdef.y = scr_vrect.y;
@@ -567,6 +565,10 @@ void V_RenderView( float stereo_separation )
 		// sort entities for better cache locality
         qsort( cl.refdef.entities, cl.refdef.num_entities, sizeof( cl.refdef.entities[0] ), (int (*)(const void *, const void *))entitycmpfnc );
 	}
+
+	// offset vieworg appropriately if we're doing stereo separation (also when the
+	// previous refdef is reused, e.g. while paused, so both eyes keep their own view)
+	VectorMA( stereo_center, stereo_separation, cl.v_right, cl.refdef.vieworg );
 
 	re.RenderFrame (&cl.refdef);
 	if (cl_stats->intValue)

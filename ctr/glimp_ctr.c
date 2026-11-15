@@ -31,6 +31,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 **
 */
 #include "../ref_gl/gl_local.h"
+#include <3ds.h>
+#include <GL/picaGL.h>
 
 static qboolean GLimp_SwitchFullscreen( int width, int height );
 qboolean GLimp_InitGL (void);
@@ -107,6 +109,21 @@ qboolean GLimp_InitGL (void)
 */
 void GLimp_BeginFrame( float camera_separation )
 {
+	// stereo: the right eye has a positive separation, the left eye (or mono) draws to the left
+	pglStereoTarget( camera_separation > 0 ? PGL_STEREO_RIGHT : PGL_STEREO_LEFT );
+}
+
+/*
+** Stereoscopic 3D helpers for SCR_UpdateScreen
+*/
+float CTR_StereoSlider( void )
+{
+	return osGet3DSliderState();
+}
+
+qboolean CTR_StereoEnable( qboolean enable )
+{
+	return pglStereoEnable( enable ) ? true : false;
 }
 
 /*

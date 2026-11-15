@@ -45,6 +45,7 @@ float	*shadedots = r_avertexnormal_dots[0];
 extern vec3_t lightspot;
 
 extern void MYgluPerspective(GLdouble fovy, GLdouble aspect, GLdouble zNear, GLdouble zFar);
+extern float R_StereoNDCShift (qboolean weapon);
 
 static void GL_LerpVerts(int nverts, dtrivertx_t *v, dtrivertx_t *ov, dtrivertx_t *verts, float *lerp, float move[3], float frontv[3], float backv[3])
 {
@@ -457,7 +458,7 @@ static qboolean R_CullAliasModel(vec3_t bbox[8], entity_t *e)
 	}
 }
 
-void R_DrawAliasModel (entity_t *e)
+static void R_DrawAliasModelInner (entity_t *e)
 {
 	int			i;
 	dmdl_t		*paliashdr;
@@ -608,7 +609,11 @@ void R_DrawAliasModel (entity_t *e)
 	/* FS: Fov > 90 view model hack */
 	if (currententity->flags & RF_WEAPONMODEL)
 	{
-		if (r_gunfov->intValue && r_gunfov->intValue <= 179)
+		qboolean bGunFovValid = r_gunfov->intValue && r_gunfov->intValue <= 179;
+
+		// stereo: the gun always gets its own projection, which places it at
+		// STEREO_GUN_DEPTH (see R_DrawAliasModel)
+		if (bGunFovValid || gl_state.camera_separation != 0)
 		{
 			bDoGunFov = true;
 			qglMatrixMode(GL_PROJECTION);
@@ -621,7 +626,13 @@ void R_DrawAliasModel (entity_t *e)
 
 		if (bDoGunFov)
 		{
-			MYgluPerspective(r_gunfov->value, (float)r_newrefdef.width / r_newrefdef.height, 4, 4096);
+			float saved = r_stereo_ndc_shift;
+
+			r_stereo_ndc_shift = R_StereoNDCShift (true);
+			if (r_lefthand->intValue == 1)	// mirrored projection
+				r_stereo_ndc_shift = -r_stereo_ndc_shift;
+			MYgluPerspective(bGunFovValid ? r_gunfov->value : r_newrefdef.fov_y, (float)r_newrefdef.width / r_newrefdef.height, 4, 4096);
+			r_stereo_ndc_shift = saved;
 			qglMatrixMode(GL_MODELVIEW);
 		}
 
@@ -752,4 +763,34 @@ void R_DrawAliasModel (entity_t *e)
 		GL_DrawAliasShadow (e, paliashdr, currententity->frame );
 	}
 	qglColor4f (1,1,1,1);
+}
+
+/*
+=================
+R_DrawAliasModel
+
+Stereo: the weapon is placed at the centered view by the client. Move it with this eye, so
+it has no parallax of its own (that parallax at a few units is what makes a double gun);
+its projection then sets its depth.
+=================
+*/
+void R_DrawAliasModel (entity_t *e)
+{
+	vec3_t	org, oldorg;
+
+	if (!(e->flags & RF_WEAPONMODEL) || gl_state.camera_separation == 0)
+	{
+		R_DrawAliasModelInner (e);
+		return;
+	}
+
+	VectorCopy (e->origin, org);
+	VectorCopy (e->oldorigin, oldorg);
+	VectorMA (org, gl_state.camera_separation, vright, e->origin);
+	VectorMA (oldorg, gl_state.camera_separation, vright, e->oldorigin);
+
+	R_DrawAliasModelInner (e);
+
+	VectorCopy (org, e->origin);
+	VectorCopy (oldorg, e->oldorigin);
 }
