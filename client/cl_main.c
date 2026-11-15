@@ -43,6 +43,7 @@ cvar_t	*adr8;
 
 cvar_t	*cl_stereo_separation;
 cvar_t	*cl_stereo;
+cvar_t	*r_stereo_depth;
 
 cvar_t	*rcon_client_password;
 cvar_t	*rcon_address;
@@ -1655,6 +1656,8 @@ void CL_InitLocal (void)
 	Cvar_SetDescription("cl_stereo_separation" ,"Stereo separation when used with cl_stereo 1.");
 	cl_stereo = Cvar_Get( "cl_stereo", "0", 0 );
 	Cvar_SetDescription("cl_stereo", "Stereo mode for 3D Glasses.");
+	r_stereo_depth = Cvar_Get( "r_stereo_depth", "3", CVAR_ARCHIVE );
+	Cvar_SetDescription("r_stereo_depth", "3DS stereoscopic 3D strength, 0 (off) to 5, scaled by the 3D slider.");
 
 	cl_add_blend = Cvar_Get ("cl_blend", "1", 0);
 	cl_add_lights = Cvar_Get ("cl_lights", "1", 0);

@@ -1482,6 +1482,29 @@ void SCR_UpdateScreen (void)
 	else if ( cl_stereo_separation->value < 0 )
 		Cvar_SetValue( "cl_stereo_separation", 0.0 );
 
+#ifdef _3DS
+	{
+		// stereoscopic 3D on the top screen: strength from the 3D slider
+		float depth = r_stereo_depth->value, slider = CTR_StereoSlider();
+
+		if (depth > 5)
+			depth = 5;
+
+		if (depth > 0 && slider > 0 && CTR_StereoEnable(true))
+		{
+			float halfeye = slider * depth / 5.0f * STEREO_MAX_HALFEYE;
+
+			numframes = 2;
+			separation[0] = -halfeye;
+			separation[1] =  halfeye;
+		}
+		else
+		{
+			CTR_StereoEnable(false);
+			numframes = 1;
+		}
+	}
+#else
 	if ( cl_stereo->intValue)
 	{
 		numframes = 2;
@@ -1494,6 +1517,7 @@ void SCR_UpdateScreen (void)
 		separation[1] = 0;
 		numframes = 1;
 	}
+#endif
 
 	for ( i = 0; i < numframes; i++ )
 	{

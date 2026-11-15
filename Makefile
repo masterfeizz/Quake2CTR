@@ -44,7 +44,8 @@ CFLAGS	:=	-g -Wall -O2 -mword-relocations -ffast-math \
 			-fomit-frame-pointer -ffunction-sections \
 			-fno-short-enums $(ARCH)
 
-CFLAGS	+=	$(INCLUDE) -DARM11 -D_3DS -DREF_HARD_LINKED -DGAME_HARD_LINKED -DOGG_SUPPORT -DVORBIS_USE_TREMOR
+CFLAGS	+=	-std=gnu99 -fcommon -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=return-mismatch -Wno-error=implicit-int
+CFLAGS	+=	$(INCLUDE) -DARM11 -D_3DS -D__3DS__ -DREF_HARD_LINKED -DGAME_HARD_LINKED -DOGG_SUPPORT -DVORBIS_USE_TREMOR
 
 CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++11
 
@@ -57,7 +58,8 @@ LIBS	:=  -lpicaGL -lctru -lm -lvorbisidec -logg
 # list of directories containing libraries, this must be the top level containing
 # include and lib
 #---------------------------------------------------------------------------------
-LIBDIRS	:= $(CTRULIB) $(DEVKITPRO)/picaGL $(DEVKITPRO)/portlibs/3ds
+PICAGL	?= $(DEVKITPRO)/picaGL
+LIBDIRS	:= $(CTRULIB) $(PICAGL) $(DEVKITPRO)/portlibs/3ds
 
 
 #---------------------------------------------------------------------------------
@@ -244,7 +246,7 @@ endif
 all: $(BUILD)
 
 $(BUILD):
-	mkdir -p build/client build/qcommon build/server build/ref_gl build/game build/ctr
+	mkdir -p $(BUILD)/client $(BUILD)/qcommon $(BUILD)/server $(BUILD)/ref_gl $(BUILD)/game $(BUILD)/ctr
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 
 #---------------------------------------------------------------------------------
